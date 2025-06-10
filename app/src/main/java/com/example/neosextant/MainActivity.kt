@@ -24,6 +24,7 @@ import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.extensions.ExtensionMode
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -93,7 +94,7 @@ import kotlin.math.sqrt
 
 // TOP-LEVEL CONSTANTS FOR CALIBRATION
 private const val SENSOR_SAMPLING_RATE_HZ = 50
-private const val CALIBRATION_DURATION_SEC = 20
+private const val CALIBRATION_DURATION_SEC = 35
 private const val SETTLING_DURATION_SEC = 5
 
 // Vec3 class
@@ -170,6 +171,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var calibrationTimerJob: Job? = null
     private var sensorAccuracyStatusState by mutableStateOf(SensorManager.SENSOR_STATUS_UNRELIABLE)
 
+    // NEW state for horizon calibration
+    var isHorizonCalibrationActive by mutableStateOf(false)
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -193,6 +197,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             Python.start(AndroidPlatform(this))
         }
 
+        // MODIFIED: Added callback for resetting calibration
         setContent {
             var showSettingsScreen by remember { mutableStateOf(false) }
             val coroutineScope = rememberCoroutineScope()
@@ -253,7 +258,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             sensorAccuracyStatus = sensorAccuracyStatusState,
                             rawPhonePitch = currentPhoneAltitudeDeg.value ?: 0.0,
                             calibrationDurationSec = CALIBRATION_DURATION_SEC,
-                            settlingDurationSec = SETTLING_DURATION_SEC
+                            settlingDurationSec = SETTLING_DURATION_SEC,
+                            onStartHorizonCalibration = {
+                                isHorizonCalibrationActive = true
+                                showSettingsScreen = false
+                            },
+                            onResetCalibration = { // NEW
+                                pitchCalibrationOffsetStringState = "0.0"
+                                Toast.makeText(applicationContext, "Pitch calibration has been reset.", Toast.LENGTH_SHORT).show()
+                            }
                         )
                     } else {
                         val currentPitchOffset = pitchCalibrationOffsetStringState.toFloatOrNull() ?: 0.0f
@@ -278,7 +291,24 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             initialAltitude = estimatedAltitudeState,
                             onAltitudeChange = { estAlt -> estimatedAltitudeState = estAlt },
                             currentDeclination = magneticDeclination,
-                            onOpenSettings = { showSettingsScreen = true }
+                            onOpenSettings = { showSettingsScreen = true },
+                            isHorizonCalibrationActive = isHorizonCalibrationActive,
+                            onHorizonCalibrationComplete = {
+                                val rawPitch = currentPhoneAltitudeDeg.value
+                                if (rawPitch != null) {
+                                    val newOffset = -rawPitch
+                                    pitchCalibrationOffsetStringState = newOffset.toFloat().format(2)
+                                    isHorizonCalibrationActive = false
+                                    Toast.makeText(applicationContext, "Horizon calibration complete. New offset: ${pitchCalibrationOffsetStringState}°", Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(applicationContext, "Could not get pitch data. Calibration cancelled.", Toast.LENGTH_SHORT).show()
+                                    isHorizonCalibrationActive = false
+                                }
+                            },
+                            onHorizonCalibrationCancel = {
+                                isHorizonCalibrationActive = false
+                                Toast.makeText(applicationContext, "Horizon calibration cancelled.", Toast.LENGTH_SHORT).show()
+                            }
                         )
                     }
                 }
@@ -827,7 +857,10 @@ fun CameraApp(
     initialAltitude: String,
     onAltitudeChange: (String) -> Unit,
     currentDeclination: Float,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    isHorizonCalibrationActive: Boolean,
+    onHorizonCalibrationComplete: () -> Unit,
+    onHorizonCalibrationCancel: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -1321,61 +1354,102 @@ fun CameraApp(
                     if (previewSurfaceProvider != provider) previewSurfaceProvider = provider
                 }
 
-                IconButton(
-                    onClick = onOpenSettings,
-                    modifier = Modifier.align(Alignment.TopStart).padding(top = 40.dp, start = 16.dp, end = 16.dp)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), RoundedCornerShape(50))
-                ) {
-                    Icon(Icons.Filled.Settings, "Settings", tint = MaterialTheme.colorScheme.onSurface)
-                }
-
-                if (isNightModeAvailable) {
-                    IconButton(
-                        onClick = { isNightModeEnabled = !isNightModeEnabled },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 40.dp, start = 16.dp, end = 16.dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), RoundedCornerShape(50))
-                    ) {
-                        Icon(
-                            if (isNightModeEnabled) Icons.Filled.NightsStay else Icons.Filled.WbSunny,
-                            "Toggle Night Mode",
-                            tint = if (isNightModeEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                if (isHorizonCalibrationActive) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Divider(
+                            color = Color.Red.copy(alpha = 0.7f),
+                            thickness = 2.dp,
+                            modifier = Modifier.fillMaxWidth().align(Alignment.Center)
                         )
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 100.dp, start = 16.dp, end = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Align the red line with the horizon, then press 'Set Horizon'.",
+                                color = Color.White,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Button(
+                                    onClick = onHorizonCalibrationComplete,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("Set Horizon")
+                                }
+                                Button(
+                                    onClick = onHorizonCalibrationCancel,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                ) {
+                                    Text("Cancel")
+                                }
+                            }
+                        }
                     }
                 }
 
-                FloatingActionButton(
-                    onClick = {
-                        val activeJobCount = mainActivityInstance?.analysisJobs?.count { it.value.isActive } ?: 0
-                        if (activeJobCount > 0) {
-                            Toast.makeText(context, "Analysis in progress ($activeJobCount)...", Toast.LENGTH_SHORT).show()
-                            return@FloatingActionButton
-                        }
-                        if (capturedImages.size < 3) {
-                            val currentSensorData = getSensorAndOrientationData()
-                            mainActivityInstance?.takePhoto(context, imageCaptureUseCase, currentSensorData, scope,
-                                onImageCaptured = { imgData ->
-                                    val index = capturedImages.indexOfFirst { it.id == imgData.id }
-                                    if (index == -1) capturedImages.add(imgData)
-                                    else capturedImages[index] = imgData
-                                    selectedImageForMetadata = capturedImages.find { it.id == imgData.id } ?: capturedImages.lastOrNull()
+                if (!isHorizonCalibrationActive) {
+                    IconButton(
+                        onClick = onOpenSettings,
+                        modifier = Modifier.align(Alignment.TopStart).padding(top = 40.dp, start = 16.dp, end = 16.dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), RoundedCornerShape(50))
+                    ) {
+                        Icon(Icons.Filled.Settings, "Settings", tint = MaterialTheme.colorScheme.onSurface)
+                    }
 
-                                    if (scaffoldState.bottomSheetState.currentValue != SheetValue.Expanded) {
-                                        scope.launch { scaffoldState.bottomSheetState.expand() }
-                                    }
-                                },
-                                onError = { exception ->
-                                    Log.e("CameraXApp", "Photo capture error in FAB: ", exception)
-                                    Toast.makeText(context, "Photo Error: ${exception.message}", Toast.LENGTH_LONG).show()
-                                }
+                    if (isNightModeAvailable) {
+                        IconButton(
+                            onClick = { isNightModeEnabled = !isNightModeEnabled },
+                            modifier = Modifier.align(Alignment.TopEnd).padding(top = 40.dp, start = 16.dp, end = 16.dp)
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), RoundedCornerShape(50))
+                        ) {
+                            Icon(
+                                if (isNightModeEnabled) Icons.Filled.NightsStay else Icons.Filled.WbSunny,
+                                "Toggle Night Mode",
+                                tint = if (isNightModeEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                             )
-                        } else {
-                            Toast.makeText(context, "Max 3 images.", Toast.LENGTH_SHORT).show()
                         }
-                    },
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
-                    containerColor = MaterialTheme.colorScheme.primary
-                ) { Icon(Icons.Filled.CameraAlt, "Take Picture", tint = MaterialTheme.colorScheme.onPrimary) }
+                    }
 
+                    FloatingActionButton(
+                        onClick = {
+                            val activeJobCount = mainActivityInstance?.analysisJobs?.count { it.value.isActive } ?: 0
+                            if (activeJobCount > 0) {
+                                Toast.makeText(context, "Analysis in progress ($activeJobCount)...", Toast.LENGTH_SHORT).show()
+                                return@FloatingActionButton
+                            }
+                            if (capturedImages.size < 3) {
+                                val currentSensorData = getSensorAndOrientationData()
+                                mainActivityInstance?.takePhoto(context, imageCaptureUseCase, currentSensorData, scope,
+                                    onImageCaptured = { imgData ->
+                                        val index = capturedImages.indexOfFirst { it.id == imgData.id }
+                                        if (index == -1) capturedImages.add(imgData)
+                                        else capturedImages[index] = imgData
+                                        selectedImageForMetadata = capturedImages.find { it.id == imgData.id } ?: capturedImages.lastOrNull()
+
+                                        if (scaffoldState.bottomSheetState.currentValue != SheetValue.Expanded) {
+                                            scope.launch { scaffoldState.bottomSheetState.expand() }
+                                        }
+                                    },
+                                    onError = { exception ->
+                                        Log.e("CameraXApp", "Photo capture error in FAB: ", exception)
+                                        Toast.makeText(context, "Photo Error: ${exception.message}", Toast.LENGTH_LONG).show()
+                                    }
+                                )
+                            } else {
+                                Toast.makeText(context, "Max 3 images.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+                        containerColor = MaterialTheme.colorScheme.primary
+                    ) { Icon(Icons.Filled.CameraAlt, "Take Picture", tint = MaterialTheme.colorScheme.onPrimary) }
+                }
             } else {
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     Text("Camera Permission Required."); Spacer(Modifier.height(8.dp))
@@ -1390,6 +1464,7 @@ fun CameraApp(
 }
 
 
+// MODIFIED: Added onResetCalibration parameter
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -1414,7 +1489,9 @@ fun SettingsScreen(
     sensorAccuracyStatus: Int,
     rawPhonePitch: Double,
     calibrationDurationSec: Int,
-    settlingDurationSec: Int
+    settlingDurationSec: Int,
+    onStartHorizonCalibration: () -> Unit,
+    onResetCalibration: () -> Unit // NEW
 ) {
     val currentPitchOffset = currentPitchOffsetString.toFloatOrNull() ?: 0f
     val calibratedPitchForDisplay = rawPhonePitch + currentPitchOffset
@@ -1479,10 +1556,19 @@ fun SettingsScreen(
             Text("Current Pitch Offset: ${currentPitchOffset.format(2)}°", style = MaterialTheme.typography.bodySmall)
             Spacer(modifier = Modifier.height(8.dp))
 
+            Button(onClick = onStartHorizonCalibration, modifier = Modifier.fillMaxWidth()) {
+                Text("Calibrate from Horizon")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+
             when (calibrationStep) {
                 CalibrationStep.Idle, CalibrationStep.Calibrated -> {
-                    Button(onClick = { onCalibrationStepChange(CalibrationStep.Step1_Sky_Instruct) }) {
-                        Text(if (calibrationStep == CalibrationStep.Calibrated) "Recalibrate Pitch" else "Start Pitch Calibration")
+                    Button(
+                        onClick = { onCalibrationStepChange(CalibrationStep.Step1_Sky_Instruct) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (calibrationStep == CalibrationStep.Calibrated) "Recalibrate Pitch (Zenith Method)" else "Start Pitch Calibration (Zenith Method)")
                     }
                     if (calibrationMessage.isNotEmpty()) {
                         Text(calibrationMessage, Modifier.padding(top = 8.dp), color = if (calibrationMessage.startsWith("Calibration failed")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center)
@@ -1500,6 +1586,17 @@ fun SettingsScreen(
                     Text(calibrationMessage.ifEmpty { "Finalizing calibration..." }, textAlign = TextAlign.Center)
                     CircularProgressIndicator(modifier = Modifier.padding(top = 8.dp))
                 }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            // NEW Reset Button
+            OutlinedButton(
+                onClick = onResetCalibration,
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("Reset Pitch Calibration to 0.0")
             }
             Spacer(Modifier.height(20.dp))
         }
