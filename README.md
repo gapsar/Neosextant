@@ -51,7 +51,7 @@ Neosextant combines modern technology with time-tested astronomical calculations
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/your-username/neosextant.git
+    git clone https://github.com/gapsar/neosextant.git
     ```
 2.  Open the project in Android Studio.
 3.  Let Gradle sync the project dependencies. The Chaquopy SDK will automatically configure the Python environment.
@@ -71,6 +71,10 @@ Neosextant combines modern technology with time-tested astronomical calculations
       * The bottom sheet shows your captured images and their analysis status.
       * Once an image is solved and its LOP is calculated, the intercept and azimuth will be displayed.
       * After three valid LOPs are available, the app automatically calculates and displays your final position fix.
+
+## Note
+
+This is a very early version of the app, do not expect any good fix as there is many inconsistencies in the code and almost no corrections whatsoever.
 
 ## License
 
