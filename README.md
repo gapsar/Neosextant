@@ -33,8 +33,6 @@ Neosextant combines modern technology with time-tested astronomical calculations
 
 ## Core Technologies
 
-## Core Technologies
-
   - **Frontend**: 100% Kotlin with [Jetpack Compose](https://developer.android.com/jetpack/compose) for a modern, declarative UI.
   - **Backend**: Python scripts running on-device via the [Chaquopy](https://chaquo.com/chaquopy/) SDK.
   - **Star Detection**: **Rust** (`cedar-detect`) compiled to a native Android library (`.so`) for high-performance centroid extraction.
