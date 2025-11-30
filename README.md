@@ -47,6 +47,8 @@ This project makes use of the following open-source libraries:
 *   [tetra3](https://github.com/esa/tetra3): Fast lost-in-space plate solving.
 *   [Chaquopy](https://chaquo.com/chaquopy/): Python SDK for Android.
 *   [osmdroid](https://github.com/osmdroid/osmdroid): OpenStreetMap-Tools for Android.
+*   [cedar-detect](https://github.com/esa/cedar-detect): Fast star detection.
+*   [cedar-solve](https://github.com/esa/cedar-solve): Fast lost-in-space plate solving based on tetra3.
 *   [Jetpack Compose](https://developer.android.com/jetpack/compose): Android’s modern toolkit for building native UI.
 
 
