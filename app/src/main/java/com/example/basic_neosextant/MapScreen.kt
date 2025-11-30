@@ -36,7 +36,7 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
-import kotlin.math.acos
+import kotlin.math.asin
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.pow
@@ -61,7 +61,7 @@ fun MapScreen(
     val estimatedGeoPoint = GeoPoint(estimatedLatitude.toDoubleOrNull() ?: 0.0, estimatedLongitude.toDoubleOrNull() ?: 0.0)
     val computedGeoPoint = GeoPoint(computedLatitude, computedLongitude)
 
-    val distance = calculateDistanceInMiles(estimatedGeoPoint, computedGeoPoint)
+    val distance = calculateDistanceInNauticalMiles(estimatedGeoPoint, computedGeoPoint)
 
     Scaffold(
         topBar = {
@@ -121,7 +121,7 @@ fun MapScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     InfoRow("Computed Position:", "${"%.4f".format(computedGeoPoint.latitude)}, ${"%.4f".format(computedGeoPoint.longitude)}")
                     InfoRow("Lat/Lon Offset:", "Lat: %.4f, Lon: %.4f".format(computedGeoPoint.latitude - estimatedGeoPoint.latitude, computedGeoPoint.longitude - estimatedGeoPoint.longitude))
-                    InfoRow("Distance Offset:", "%.2f miles".format(distance))
+                    InfoRow("Distance Offset:", "%.2f NM".format(distance))
                     Spacer(modifier = Modifier.height(16.dp))
                     Text("LOP Details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     InfoRow("LOP 1 Azimuth/Intercept:", "$lop1Azimuth / $lop1Intercept NM")
@@ -183,8 +183,8 @@ fun InfoRow(label: String, value: String) {
     }
 }
 
-fun calculateDistanceInMiles(point1: GeoPoint, point2: GeoPoint): Double {
-    val earthRadiusMiles = 3958.8
+fun calculateDistanceInNauticalMiles(point1: GeoPoint, point2: GeoPoint): Double {
+    val earthRadiusNauticalMiles = 3440.065
     val lat1Rad = Math.toRadians(point1.latitude)
     val lon1Rad = Math.toRadians(point1.longitude)
     val lat2Rad = Math.toRadians(point2.latitude)
@@ -194,6 +194,6 @@ fun calculateDistanceInMiles(point1: GeoPoint, point2: GeoPoint): Double {
     val dLat = lat2Rad - lat1Rad
 
     val a = sin(dLat / 2).pow(2.0) + cos(lat1Rad) * cos(lat2Rad) * sin(dLon / 2).pow(2.0)
-    val c = 2 * acos(kotlin.math.sqrt(a)) // Using sqrt is more direct than the original formula
-    return earthRadiusMiles * c
+    val c = 2 * asin(kotlin.math.sqrt(a))
+    return earthRadiusNauticalMiles * c
 }

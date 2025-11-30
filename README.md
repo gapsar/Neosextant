@@ -64,7 +64,7 @@ This project makes use of the following open-source libraries:
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/gapsar/neosextant.git
+    git clone https://github.com/gapsar/Neosextant.git
     ```
 2.  Open the project in Android Studio.
 3.  Let Gradle sync the project dependencies. The Chaquopy SDK will automatically configure the Python environment.
@@ -87,7 +87,7 @@ This project makes use of the following open-source libraries:
 
 ## Note
 
-This is a very early version of the app, do not expect any good fix as there is many inconsistencies in the code and almost no corrections whatsoever.
+This is a very early version of the app, do not expect any good fix as there are many inconsistencies in the code and almost no corrections whatsoever.
 
 ## License
 
