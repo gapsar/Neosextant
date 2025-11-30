@@ -12,20 +12,19 @@ Neosextant combines modern technology with time-tested astronomical calculations
 
 1.  **Observation Acquisition**: The user points the device at a celestial object (like a star or planet) and captures an image. At the moment of capture, the app records the precise UTC time and the phone's orientation (pitch, azimuth, and roll) using its internal sensors.
 
-2.  **Astrometry (Plate-Solving)**: The captured image is passed to a powerful, on-device Python-based analysis engine.
-
-      * This engine, using a fork of the `tetra3` library called **`cedar-solve`**, analyzes the star patterns in the image.
-      * By matching these patterns against a star catalog, it calculates the exact celestial coordinates (Right Ascension and Declination) the camera was pointing at. This entire process is handled by `image_processor.py`.
+2.  **Astrometry (Plate-Solving)**: The captured image is passed to a powerful, on-device hybrid analysis engine.
+      *   **Star Detection**: The app utilizes **`cedar-detect`**, a high-performance Rust binary, to rapidly extract star centroids from the image. If the Rust binary encounters an issue, it seamlessly falls back to the Python-based `tetra3` extractor.
+      *   **Solving**: The extracted star patterns are matched against a star catalog using the `tetra3` library (wrapped in `cedar-solve`) to calculate the exact celestial coordinates (Right Ascension and Declination) the camera was pointing at. This orchestration is handled by `celestial_navigator.py`.
 
 3.  **Position Calculation**: With the celestial object's calculated position and its observed altitude (derived from the phone's calibrated pitch sensor), the app calculates a **Line of Position (LOP)** using the Marcq St. Hilaire intercept method.
 
-      * This calculation, performed by `astro_navigator.py`, determines a line on which the observer is located.
-      * By taking observations of **three different objects**, the app generates three intersecting LOPs, providing a precise latitude and longitude "fix".
+      *   This calculation, also performed by `celestial_navigator.py`, determines a line on which the observer is located.
+      *   By taking observations of **three different objects**, the app generates three intersecting LOPs, providing a precise latitude and longitude "fix".
 
 ## Features
 
   - **Real-time Celestial Navigation**: Get a positional fix using just your phone's camera and sensors.
-  - **Powerful Plate-Solving**: Integrates the `cedar-solve` library for fast and reliable on-device star identification.
+  - **Hybrid Rust/Python Engine**: Leverages the speed of Rust (`cedar-detect`) for image processing and the flexibility of Python (`tetra3`) for astrometry.
   - **Accurate Altitude Measurement**: Features robust sensor calibration routines, including both horizon and zenith-based methods, to correct for device pitch error.
   - **Single and Multi-LOP Support**: Calculate a single Line of Position or a full 3-LOP fix.
   - **Flexible Image Input**: Analyze images taken directly with the camera or import them from your device's storage.
@@ -34,10 +33,24 @@ Neosextant combines modern technology with time-tested astronomical calculations
 
 ## Core Technologies
 
+## Core Technologies
+
   - **Frontend**: 100% Kotlin with [Jetpack Compose](https://developer.android.com/jetpack/compose) for a modern, declarative UI.
   - **Backend**: Python scripts running on-device via the [Chaquopy](https://chaquo.com/chaquopy/) SDK.
-  - **Astrometry Engine**: `cedar-solve` (a high-performance fork of `tetra3`), responsible for the core plate-solving logic.
-  - **Navigational Calculations**: Custom Python scripts (`astro_navigator.py`) implementing celestial navigation formulae for LOP and fix calculations.
+  - **Star Detection**: **Rust** (`cedar-detect`) compiled to a native Android library (`.so`) for high-performance centroid extraction.
+  - **Astrometry Engine**: `cedar-solve`, a fork of [tetra3](https://github.com/esa/tetra3), responsible for the core plate-solving logic.
+  - **Navigational Calculations**: Custom Python scripts (`celestial_navigator.py`) implementing celestial navigation formulae for LOP and fix calculations.
+  - **Mapping**: [osmdroid](https://github.com/osmdroid/osmdroid) for offline-capable map rendering.
+
+## Acknowledgements
+
+This project makes use of the following open-source libraries:
+
+*   [tetra3](https://github.com/esa/tetra3): Fast lost-in-space plate solving.
+*   [Chaquopy](https://chaquo.com/chaquopy/): Python SDK for Android.
+*   [osmdroid](https://github.com/osmdroid/osmdroid): OpenStreetMap-Tools for Android.
+*   [Jetpack Compose](https://developer.android.com/jetpack/compose): Android’s modern toolkit for building native UI.
+
 
 ## Getting Started
 
