@@ -10,7 +10,7 @@ Neosextant revitalizes the ancient art of celestial navigation, turning your sma
 
 Neosextant combines modern technology with time-tested astronomical calculations to determine your location. The process involves three main steps:
 
-1.  **Observation Acquisition**: The user points the device at a celestial object (like a star or planet) and captures an image. At the moment of capture, the app records the precise UTC time and the phone's orientation (pitch, azimuth, and roll) using its internal sensors.
+1.  **Observation Acquisition**: The user points the device at a celestial object (like a star or planet) and captures an image. During the capture process (which may include a delay for exposure), the app averages the phone's orientation (pitch) using its internal sensors to reduce noise and improve accuracy.
 
 2.  **Astrometry (Plate-Solving)**: The captured image is passed to a powerful, on-device hybrid analysis engine.
       *   **Star Detection**: The app utilizes **`cedar-detect`**, a high-performance Rust binary, to rapidly extract star centroids from the image. If the Rust binary encounters an issue, it seamlessly falls back to the Python-based `tetra3` extractor.
@@ -58,6 +58,7 @@ This project makes use of the following open-source libraries:
 
   - An Android device.
   - Required hardware sensors: Camera, Accelerometer, Gyroscope.
+  - **Java 17** (required for building).
   - Android Studio to build the project.
 
 ### Building from Source
@@ -74,8 +75,8 @@ This project makes use of the following open-source libraries:
 
 1.  **Enter Estimated Position (EP)**: Navigate to the **Settings** screen and input your approximate latitude and longitude. This is required for the LOP calculations.
 2.  **Calibrate the Sensors**: This is a crucial step for accuracy.
-      * In Settings, choose either **Calibrate from Horizon** or **Start Pitch Calibration (Zenith Method)**.
-      * Follow the on-screen instructions to align your phone with the horizon or zenith. This corrects any mounting error in the phone's pitch sensor.
+      * In Settings, choose **Calibrate from Horizon**.
+      * Follow the on-screen instructions to align your phone with the horizon. This corrects any mounting error in the phone's pitch sensor.
 3.  **Take Observations**:
       * From the main camera screen, aim at a part of the sky with star or celestial object.
       * Tap the camera button to capture an image. The app will immediately begin processing.
@@ -94,3 +95,7 @@ This is a very early version of the app, do not expect any good fix as there are
 This project is licensed under the Apache License 2.0. See the `LICENSE.md` file for details.
 
 The included `cedar-solve` library is distributed under the Apache License 2.0.
+
+## Documentation
+
+For more detailed information about the architecture, application logic, and build process, please refer to the [docs](docs/) directory.
