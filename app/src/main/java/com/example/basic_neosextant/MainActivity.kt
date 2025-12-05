@@ -142,6 +142,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var rotationVectorSensor: Sensor? = null
     private val currentPhoneAltitudeDeg = mutableStateOf<Double?>(null)
     private val rotationMatrix = FloatArray(9)
+    
+    // Averaging logic
+    private val pitchReadings = mutableListOf<Double>()
+    private var isAveragingPitch = false
 
     // A map to keep track of background processing jobs for each image
     val analysisJobs = mutableMapOf<Long, Job>()
@@ -218,6 +222,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val horizontalMagnitude = sqrt(camDirX * camDirX + camDirY * camDirY)
                 val rawPitchReading = Math.toDegrees(atan2(camDirZ, horizontalMagnitude).toDouble())
                 currentPhoneAltitudeDeg.value = rawPitchReading
+                
+                if (isAveragingPitch) {
+                    pitchReadings.add(rawPitchReading)
+                }
             }
         }
     }
@@ -237,6 +245,23 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // Public method to get the current pitch
     fun getCurrentPitch(): Double? {
         return currentPhoneAltitudeDeg.value
+    }
+
+    fun startPitchAveraging() {
+        pitchReadings.clear()
+        isAveragingPitch = true
+        Log.d("MainActivity", "Started pitch averaging")
+    }
+
+    fun stopPitchAveraging(): Double? {
+        isAveragingPitch = false
+        val average = if (pitchReadings.isNotEmpty()) {
+            pitchReadings.average()
+        } else {
+            currentPhoneAltitudeDeg.value
+        }
+        Log.d("MainActivity", "Stopped pitch averaging. Count: ${pitchReadings.size}, Average: $average")
+        return average
     }
 
     // Calibration Persistence
@@ -664,15 +689,19 @@ fun CameraView(
                 IconButton(onClick = {
                     if (!isTakingPicture && capturedImages.size < 3) {
                         isTakingPicture = true
-                        // Apply calibration offset to the measured height
-                        val rawPitch = getCurrentPitch()
-                        val offset = mainActivity.getCalibrationOffset()
-                        val measuredHeight = if (rawPitch != null) rawPitch + offset else null
+                        
+                        // Start averaging pitch readings
+                        mainActivity.startPitchAveraging()
                         
                         takePhoto(
                             context = context,
                             imageCapture = imageCapture,
                             onImageCaptured = { uri, path ->
+                                // Stop averaging and get the result
+                                val avgPitch = mainActivity.stopPitchAveraging()
+                                val offset = mainActivity.getCalibrationOffset()
+                                val measuredHeight = if (avgPitch != null) avgPitch + offset else null
+                                
                                 val imageName = File(path).name
                                 val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
                                 val newImageInfo = ImageData(uri = uri, name = imageName, timestamp = timestamp, measuredHeight = measuredHeight)
@@ -772,6 +801,7 @@ fun CameraView(
                             },
                             onError = {
                                 isTakingPicture = false
+                                mainActivity.stopPitchAveraging() // Ensure we stop averaging on error
                             }
                         )
                     }
