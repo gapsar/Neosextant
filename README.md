@@ -2,62 +2,55 @@
 
 **A modern, real-time celestial navigation tool for Android.**
 
-Neosextant revitalizes the ancient art of celestial navigation, turning your smartphone into a powerful sextant. By capturing images of the night sky, the app performs on-device astrometry (plate-solving) to precisely identify celestial bodies and calculates your geographic position on Earth using classic navigational principles.
+Neosextant revitalizes the ancient art of celestial navigation, turning your smartphone into a powerful sextant. By capturing images of the night sky, the app performs on-device astrometry (plate-solving) to precisely identify celestial bodies, and uses an advanced iterative solver to calculate your geographic position on Earth—completely offline and without needing a prior estimated position.
 
 -----
 
+## What's New?
+The latest versions of Neosextant represent a massive architectural leap:
+*   **Iterative Celestial Solver**: The app no longer requires an Estimated Position (EP) to find your fix. It automatically calculates an initial seed based on the stars' Geographic Positions and refines it using a Least Squares iterative solver for high-precision fixes.
+*   **Time Synchronization Engine**: Precise time is critical for celestial navigation. The app now features opportunistic absolute-time syncing via network NTP, with GPS fallbacks.
+*   **History Management**: Persistent viewing, management, and review of all your celestial observations via a local Room database.
+*   **Continuous Calibration**: Automatic calibration tracking, horizon alignment, and a background worker to remind you to recalibrate your sensors for pitch accuracy.
+*   **First-Launch Tutorial**: A seamless onboarding experience to help new users learn how to use the app effectively.
+
 ## How It Works
 
-Neosextant combines modern technology with time-tested astronomical calculations to determine your location. The process involves three main steps:
+Neosextant combines modern computer vision with time-tested astronomical calculations. The process involves three main steps:
 
-1.  **Observation Acquisition**: The user points the device at a celestial object (like a star or planet) and captures an image. During the capture process (which may include a delay for exposure), the app averages the phone's orientation (pitch) using its internal sensors to reduce noise and improve accuracy.
-
-2.  **Astrometry (Plate-Solving)**: The captured image is passed to a powerful, on-device hybrid analysis engine.
-      *   **Star Detection**: The app utilizes **`cedar-detect`**, a high-performance Rust binary, to rapidly extract star centroids from the image. If the Rust binary encounters an issue, it seamlessly falls back to the Python-based `tetra3` extractor.
-      *   **Solving**: The extracted star patterns are matched against a star catalog using the `tetra3` library (wrapped in `cedar-solve`) to calculate the exact celestial coordinates (Right Ascension and Declination) the camera was pointing at. This orchestration is handled by `celestial_navigator.py`.
-
-3.  **Position Calculation**: With the celestial object's calculated position and its observed altitude (derived from the phone's calibrated pitch sensor), the app calculates a **Line of Position (LOP)** using the Marcq St. Hilaire intercept method.
-
-      *   This calculation, also performed by `celestial_navigator.py`, determines a line on which the observer is located.
-      *   By taking observations of **three different objects**, the app generates three intersecting LOPs, providing a precise latitude and longitude "fix".
+1.  **Observation Acquisition**: The user points the device at a star-filled sky and captures an image. The app automatically averages the phone's orientation (pitch) using its calibrated internal sensors to measure the body's sextant altitude accurately.
+2.  **Astrometry (Plate-Solving)**: The captured image is analyzed natively on-device.
+      *   **Star Detection**: Utilizing **`cedar-detect`**, a high-performance Rust executable, star centroids are rapidly extracted.
+      *   **Solving**: The pattern of stars is matched against a bundled star catalog using `tetra3` (bridged via Python) to determine the exact celestial coordinates (Right Ascension and Declination) the camera was pointing at.
+3.  **Position Calculation (Iterative Solver)**: Once three observations are collected, the backend calculations in `celestial_navigator.py` take over:
+      *   The app calculates the Geographic Position (GP) of the observed stars to guess a "Seed" position.
+      *   It calculates calculated Altitudes (Hc) and Azimuths, forming theoretical Lines of Position (LOP).
+      *   An iterative Least Squares mathematical fit shifts the seed position, repeating until it converges on a tight, accurate latitude and longitude fix.
 
 ## Features
 
-  - **Real-time Celestial Navigation**: Get a positional fix using just your phone's camera and sensors.
-  - **Hybrid Rust/Python Engine**: Leverages the speed of Rust (`cedar-detect`) for image processing and the flexibility of Python (`tetra3`) for astrometry.
-  - **Accurate Altitude Measurement**: Features robust sensor calibration routines, including both horizon and zenith-based methods, to correct for device pitch error.
-  - **Single and Multi-LOP Support**: Calculate a single Line of Position or a full 3-LOP fix.
-  - **Flexible Image Input**: Analyze images taken directly with the camera or import them from your device's storage.
-  - **User-Friendly Interface**: A clean Jetpack Compose UI to manage observations, enter your estimated position, and view results.
-  - **Night Mode**: Includes an optional night mode for better viewing in dark conditions.
+  - **Real-time, Offline Navigation**: Get a positional fix using just your phone's camera and sensors, no internet required.
+  - **Zero-Input Iterative Solver**: Automated position calculation eliminates the need to manually input an Estimated Position.
+  - **Hybrid Rust/Python Engine**: Leverages the blinding speed of Rust (`cedar-detect`) for image processing and the flexibility of Python (`tetra3`, `astropy`) for scientific astrometry.
+  - **Advanced Time Sync**: Ensures astrometric accuracy by syncing the device clock against trusted NTP/GPS time.
+  - **Robust Sensor Calibration**: Horizon-based calibration methods to minimize device pitch errors and improve altitude readings.
+  - **Observation History**: Store, manage, and review your navigational fixes seamlessly.
+  - **Clean UI**: A completely modern 100% Jetpack Compose interface, complete with a dark night-mode for preserving night vision.
 
 ## Core Technologies
 
-  - **Frontend**: 100% Kotlin with [Jetpack Compose](https://developer.android.com/jetpack/compose) for a modern, declarative UI.
-  - **Backend**: Python scripts running on-device via the [Chaquopy](https://chaquo.com/chaquopy/) SDK.
-  - **Star Detection**: **Rust** (`cedar-detect`) compiled to a native Android library (`.so`) for high-performance centroid extraction.
-  - **Astrometry Engine**: `cedar-solve`, a fork of [tetra3](https://github.com/esa/tetra3), responsible for the core plate-solving logic.
-  - **Navigational Calculations**: Custom Python scripts (`celestial_navigator.py`) implementing celestial navigation formulae for LOP and fix calculations.
+  - **Frontend**: 100% Kotlin with [Jetpack Compose](https://developer.android.com/jetpack/compose) and Compose Navigation.
+  - **Backend Layer**: Python scripts running on-device via the [Chaquopy](https://chaquo.com/chaquopy/) SDK.
+  - **Star Detection**: **Rust** (`cedar-detect`) bundled as a native executable for extreme centroid extraction performance.
+  - **Astrometry & Math**: `tetra3` for plate-solving, backed by `astropy` for astronomical frame transformations and Time formatting.
+  - **Data Persistence**: Android Room Database (`HistoryRepository.kt`).
   - **Mapping**: [osmdroid](https://github.com/osmdroid/osmdroid) for offline-capable map rendering.
-
-## Acknowledgements
-
-This project makes use of the following open-source libraries:
-
-*   [tetra3](https://github.com/esa/tetra3): Fast lost-in-space plate solving.
-*   [Chaquopy](https://chaquo.com/chaquopy/): Python SDK for Android.
-*   [osmdroid](https://github.com/osmdroid/osmdroid): OpenStreetMap-Tools for Android.
-*   [cedar-detect](https://github.com/esa/cedar-detect): Fast star detection.
-*   [cedar-solve](https://github.com/esa/cedar-solve): Fast lost-in-space plate solving based on tetra3.
-*   [Jetpack Compose](https://developer.android.com/jetpack/compose): Android’s modern toolkit for building native UI.
-
 
 ## Getting Started
 
 ### Prerequisites
 
-  - An Android device.
-  - Required hardware sensors: Camera, Accelerometer, Gyroscope.
+  - An Android device with Camera, Accelerometer, and Gyroscope sensors.
   - **Java 17** (required for building).
   - Android Studio to build the project.
 
@@ -68,34 +61,31 @@ This project makes use of the following open-source libraries:
     git clone https://github.com/gapsar/Neosextant.git
     ```
 2.  Open the project in Android Studio.
-3.  Let Gradle sync the project dependencies. The Chaquopy SDK will automatically configure the Python environment.
-4.  Build the project and run it on an Android device or emulator.
+3.  Allow Gradle to sync the project dependencies. The Chaquopy SDK will automatically configure the Python environment and its PIP dependencies.
+4.  Build the project and install it on a physical Android device. *(Emulators lack the realistic sensor outputs necessary for accurate celestial observations).*
 
 ## How to Use the App
 
-1.  **Enter Estimated Position (EP)**: Navigate to the **Settings** screen and input your approximate latitude and longitude. This is required for the LOP calculations.
+1.  **Onboarding**: On first launch, follow the interactive tutorial to familiarize yourself with the interface.
 2.  **Calibrate the Sensors**: This is a crucial step for accuracy.
-      * In Settings, choose **Calibrate from Horizon**.
-      * Follow the on-screen instructions to align your phone with the horizon. This corrects any mounting error in the phone's pitch sensor.
+      * Go to the Settings or Calibration screen and choose **Calibrate from Horizon**.
+      * Follow the on-screen instructions to align your phone with a flat, level horizon. This eliminates manufacturer mounting errors in your device's pitch sensor.
 3.  **Take Observations**:
-      * From the main camera screen, aim at a part of the sky with star or celestial object.
-      * Tap the camera button to capture an image. The app will immediately begin processing.
-      * Repeat this for three parts, preferably at different azimuths and altitudes, to get a strong fix.
+      * Aim your camera at a part of the night sky containing visible stars.
+      * Capture an image. The app will immediately run the astrometry engine to plate-solve the frame.
+      * Repeat this for a total of **three** parts of the sky, preferably spread out in different directions, for the strongest possible fix.
 4.  **View Results**:
-      * The bottom sheet shows your captured images and their analysis status.
-      * Once an image is solved and its LOP is calculated, the intercept and azimuth will be displayed.
-      * After three valid LOPs are available, the app automatically calculates and displays your final position fix.
-
-## Note
-
-This is a very early version of the app, do not expect any good fix as there are many inconsistencies in the code and almost no corrections whatsoever.
+      * As images are solved, they appear in the bottom sheet.
+      * Once three valid observations are collected, the internal **Iterative Solver** runs automatically.
+      * Your highly-accurate final calculated position (Latitude, Longitude) and estimated error will be displayed!
+      * You can view your past fixes in the **History** tab.
 
 ## License
 
 This project is licensed under the Apache License 2.0. See the `LICENSE.md` file for details.
 
-The included `cedar-solve` library is distributed under the Apache License 2.0.
+The included astrometry software, based heavily on ESA projects (`tetra3`, `cedar-detect`, `cedar-solve`), retains their respective Apache License 2.0 terms.
 
 ## Documentation
 
-For more detailed information about the architecture, application logic, and build process, please refer to the [docs](docs/) directory.
+For deep technical dives into the application architecture, the Iterative Solver logic, and build constraints, please refer to the markdown files in the [docs](docs/) directory.
