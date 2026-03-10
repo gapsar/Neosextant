@@ -64,7 +64,7 @@ class CedarDetectClient:
                  self._binary_path = fallback_path
              else:
                  raise ValueError(f"The cedar-detect-server binary could not be found at '{self._binary_path}' or '{fallback_path}'.")
-        
+
         # Ensure the binary is executable (chmod +x might still be needed even in native lib dir on some devices)
         import os
         import stat
@@ -141,7 +141,7 @@ class CedarDetectClient:
                         self._logger.warning("CedarDetectServer output:\n%s", err_out)
                     except Exception as e:
                         self._logger.warning("Could not read server log file: %s", e)
-                
+
                 # Close the log file
                 try:
                     self._log_file.close()
@@ -159,7 +159,7 @@ class CedarDetectClient:
                 if self._log_file:
                     self._log_file.close()
                 self._log_file = open(self._log_file_path, "a") # Append to existing log
-                
+
                 self._subprocess = subprocess.Popen(
                     [str(self._binary_path), '--port', str(self._port)],
                     stderr=self._log_file,

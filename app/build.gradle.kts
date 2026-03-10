@@ -1,9 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
     id("com.chaquo.python")
 }
+
+// Read local.properties for configurable Python path
+val localPropsFile = rootProject.file("local.properties")
+val localProps = Properties()
+if (localPropsFile.exists()) { localProps.load(localPropsFile.inputStream()) }
+val chaquopyPython = localProps.getProperty("chaquopy.python", "python3")
 
 android {
     namespace = "com.example.basic_neosextant"
@@ -12,19 +21,22 @@ android {
     defaultConfig {
         applicationId = "com.example.basic_neosextant"
         minSdk = 25
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
         ndk {
-            // Specify the ABIs you want to support
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            // Constrain native libraries to ARM only. This halves the Chaquopy footprint
+            // by excluding x86 and x86_64, reducing the final APK size significantly.
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }
+        
         chaquopy {
             defaultConfig {
                 version = "3.10"
-                buildPython("/home/gapsar/.pyenv/versions/3.10.12/bin/python3.10")
+                buildPython(chaquopyPython)
                 pip {
                     install("Pillow")
                     install("scipy")
@@ -41,7 +53,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -58,6 +71,11 @@ android {
     buildFeatures {
         compose = true
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
@@ -71,6 +89,10 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.text.google.fonts)
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.preference.ktx)
+    implementation(libs.lifecycle.viewmodel.compose)
+    implementation(libs.exifinterface)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -79,22 +101,25 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
-    // CameraX core library
-    implementation("androidx.camera:camera-core:1.3.1")
-    // CameraX Camera2 extensions
-    implementation("androidx.camera:camera-camera2:1.3.1")
-    // CameraX Lifecycle library
-    implementation("androidx.camera:camera-lifecycle:1.3.1")
-    // CameraX View class
-    implementation("androidx.camera:camera-view:1.3.1")
-    implementation("androidx.camera:camera-extensions:1.4.2")
+    // CameraX
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.camera.extensions)
+
     // Coil for image loading
-    implementation("io.coil-kt:coil-compose:2.4.0")
+    implementation(libs.coil.compose)
     // Material Icons Extended
-    implementation("androidx.compose.material:material-icons-extended:1.6.3")
+    implementation(libs.material.icons.extended)
     // Navigation Compose
-    implementation("androidx.navigation:navigation-compose:2.7.7")
+    implementation(libs.navigation.compose)
+
+    // Room
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    ksp(libs.room.compiler)
 
     // OSMDroid for offline maps
-    implementation("org.osmdroid:osmdroid-android:6.1.18")
+    implementation(libs.osmdroid.android)
 }

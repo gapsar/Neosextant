@@ -24,13 +24,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import com.example.basic_neosextant.model.*
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -47,12 +52,7 @@ fun MapScreen(
     navController: NavController,
     estimatedLatitude: String,
     estimatedLongitude: String,
-    lop1Azimuth: Float,
-    lop1Intercept: Float,
-    lop2Azimuth: Float,
-    lop2Intercept: Float,
-    lop3Azimuth: Float,
-    lop3Intercept: Float,
+    capturedImages: List<ImageData>,
     computedLatitude: Double,
     computedLongitude: Double
 ) {
@@ -62,6 +62,18 @@ fun MapScreen(
     val computedGeoPoint = GeoPoint(computedLatitude, computedLongitude)
 
     val distance = calculateDistanceInNauticalMiles(estimatedGeoPoint, computedGeoPoint)
+
+    val mapView = remember { MapView(context) }
+
+    var showDetailsSheet by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        mapView.onResume()
+        onDispose {
+            mapView.onPause()
+            mapView.onDetach()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -92,19 +104,52 @@ fun MapScreen(
                         .fillMaxWidth()
                         .height(400.dp),
                     factory = {
-                        MapView(it).apply {
-                            setTileSource(TileSourceFactory.MAPNIK)
+                        mapView.apply {
                             setMultiTouchControls(true)
-                            controller.setZoom(12.0)
-                            controller.setCenter(estimatedGeoPoint)
-                            addMarker(this, context, estimatedGeoPoint, "Estimated Position")
-                            addMarker(this, context, computedGeoPoint, "Computed Position")
 
-                            // Draw the LOPs
-                            addLopLine(this, estimatedGeoPoint, lop1Azimuth, lop1Intercept, Color.RED)
-                            addLopLine(this, estimatedGeoPoint, lop2Azimuth, lop2Intercept, Color.GREEN)
-                            addLopLine(this, estimatedGeoPoint, lop3Azimuth, lop3Intercept, Color.BLUE)
+                            // 1. Configure OSMDroid Cache Directory
+                            val basePath = java.io.File(context.getExternalFilesDir(null), "osmdroid")
+                            basePath.mkdirs()
+                            org.osmdroid.config.Configuration.getInstance().osmdroidBasePath = basePath
+                            org.osmdroid.config.Configuration.getInstance().osmdroidTileCache = basePath
+
+                            // 2. Check for offline archives (e.g. .zip, .sqlite) in the basePath
+                            val archives = basePath.listFiles { file ->
+                                file.name.endsWith(".sqlite") || file.name.endsWith(".zip") || file.name.endsWith(".mbtiles")
+                            }
+
+                            if (!archives.isNullOrEmpty()) {
+                                // If offline files exist, use them via standard tile provider
+                                setUseDataConnection(false)
+                                val provider = org.osmdroid.tileprovider.MapTileProviderBasic(context)
+                                provider.setOfflineFirst(true)
+                                tileProvider = provider
+                                // Defaulting map source explicitly can sometimes break offline viewers, so we let provider handle it.
+                            } else {
+                                // Fallback to online map if no offline archive is bundled
+                                setTileSource(TileSourceFactory.MAPNIK)
+                            }
                         }
+                    },
+                    update = { view ->
+                        view.overlays.clear() // H-14: Clear stale overlays before adding new ones
+                        view.controller.setZoom(12.0)
+                        view.controller.setCenter(estimatedGeoPoint)
+                        addMarker(view, context, estimatedGeoPoint, "Estimated Position")
+                        addMarker(view, context, computedGeoPoint, "Computed Position")
+
+                        // Draw the LOPs
+                        capturedImages.forEachIndexed { index, imageData ->
+                            val azimuth = imageData.lopData?.azimuthDeg?.toFloat() ?: return@forEachIndexed
+                            val intercept = imageData.lopData.interceptNm?.toFloat() ?: return@forEachIndexed
+                            val color = when(index) {
+                                0 -> Color.RED
+                                1 -> Color.GREEN
+                                else -> Color.BLUE
+                            }
+                            addLopLine(view, estimatedGeoPoint, azimuth, intercept, color)
+                        }
+                        view.invalidate()
                     }
                 )
             }
@@ -122,11 +167,60 @@ fun MapScreen(
                     InfoRow("Computed Position:", "${"%.4f".format(computedGeoPoint.latitude)}, ${"%.4f".format(computedGeoPoint.longitude)}")
                     InfoRow("Lat/Lon Offset:", "Lat: %.4f, Lon: %.4f".format(computedGeoPoint.latitude - estimatedGeoPoint.latitude, computedGeoPoint.longitude - estimatedGeoPoint.longitude))
                     InfoRow("Distance Offset:", "%.2f NM".format(distance))
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("LOP Details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    InfoRow("LOP 1 Azimuth/Intercept:", "$lop1Azimuth / $lop1Intercept NM")
-                    InfoRow("LOP 2 Azimuth/Intercept:", "$lop2Azimuth / $lop2Intercept NM")
-                    InfoRow("LOP 3 Azimuth/Intercept:", "$lop3Azimuth / $lop3Intercept NM")
+
+                    if (capturedImages.any { it.lopData != null }) {
+                        androidx.compose.material3.Button(
+                            onClick = { showDetailsSheet = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("View Detailed Calculations")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showDetailsSheet) {
+            androidx.compose.material3.ModalBottomSheet(
+                onDismissRequest = { showDetailsSheet = false },
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .padding(bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("LOP Detailed Calculations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+
+                    capturedImages.forEachIndexed { index, imageData ->
+                        val ra = imageData.tetra3Result.raDeg ?: 0.0
+                        val dec = imageData.tetra3Result.decDeg ?: 0.0
+                        val hc = imageData.lopData?.computedAltitudeDeg ?: 0.0
+                        val ho = imageData.lopData?.observedAltitudeDeg ?: 0.0
+                        val intercept = imageData.lopData?.interceptNm ?: 0.0
+                        val azimuth = imageData.lopData?.azimuthDeg ?: 0.0
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("Observation ${index + 1}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                InfoRow("Right Ascension (RA):", "%.4f°".format(ra))
+                                InfoRow("Declination (Dec):", "%.4f°".format(dec))
+                                InfoRow("Computed Alt (Hc):", "%.4f°".format(hc))
+                                InfoRow("Observed Alt (Ho):", "%.4f°".format(ho))
+                                androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                InfoRow("Intercept:", "%.2f NM".format(intercept))
+                                InfoRow("Azimuth (Zn):", "%.1f°".format(azimuth))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -138,10 +232,8 @@ private fun addMarker(mapView: MapView, context: Context, geoPoint: GeoPoint, ti
     marker.position = geoPoint
     marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
     marker.title = title
-    // You can customize the marker icon here
-    // marker.icon = ContextCompat.getDrawable(context, R.drawable.your_marker_icon)
     mapView.overlays.add(marker)
-    mapView.invalidate() // Redraw the map
+    mapView.invalidate()
 }
 
 private fun addLopLine(mapView: MapView, estimatedPosition: GeoPoint, azimuth: Float, intercept: Float, color: Int) {
@@ -150,7 +242,9 @@ private fun addLopLine(mapView: MapView, estimatedPosition: GeoPoint, azimuth: F
 
     // 1. Find the point on the line of position closest to the estimated position.
     // This point is displaced from the estimated position by the intercept distance along the azimuth.
-    val lopCenterPoint = estimatedPosition.destinationPoint(interceptMeters, azimuth.toDouble())
+    // Handle negative intercepts by flipping the azimuth 180 degrees
+    val correctedAzimuth = if (interceptMeters < 0) (azimuth.toDouble() + 180.0) % 360.0 else azimuth.toDouble()
+    val lopCenterPoint = estimatedPosition.destinationPoint(kotlin.math.abs(interceptMeters), correctedAzimuth)
 
     // 2. Define the line of position. It's a straight line perpendicular to the azimuth.
     // We create a very long line by finding two points far away from the center point.
@@ -166,7 +260,7 @@ private fun addLopLine(mapView: MapView, estimatedPosition: GeoPoint, azimuth: F
     lopLine.outlinePaint.strokeWidth = 5f
 
     mapView.overlays.add(lopLine)
-    mapView.invalidate() // Redraw the map
+    mapView.invalidate()
 }
 
 
