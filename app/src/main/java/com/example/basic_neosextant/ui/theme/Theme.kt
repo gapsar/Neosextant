@@ -1,4 +1,4 @@
-package com.example.basic_neosextant.compose
+package com.example.basic_neosextant.ui.theme
 
 import android.app.Activity
 import android.os.Build
@@ -268,7 +268,7 @@ fun Basic_neosextantTheme(
           val context = LocalContext.current
           if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
       }
-      
+
       darkTheme -> darkScheme
       else -> lightScheme
   }
@@ -279,4 +279,3 @@ fun Basic_neosextantTheme(
     content = content
   )
 }
-

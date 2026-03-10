@@ -19,3 +19,19 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# --- Chaquopy (Python runtime) ---
+# Keep all Chaquopy classes used for Python interop
+-keep class com.chaquo.python.** { *; }
+-keepclassmembers class com.chaquo.python.** { *; }
+
+# Keep app data classes that may be accessed reflectively
+-keep class com.example.basic_neosextant.** { *; }
+
+# Keep Astropy/numpy native bindings
+-keepclassmembers class * {
+    native <methods>;
+}
+
+# Preserve source file/line info for crash reports
+-keepattributes SourceFile,LineNumberTable

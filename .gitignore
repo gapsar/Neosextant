@@ -20,3 +20,8 @@ cedar-detect-source/target/
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Large binaries and releases to exclude from Git history
+.jdk17/
+jdk17/
+releases/

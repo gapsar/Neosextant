@@ -1,4 +1,4 @@
-package com.example.basic_neosextant.compose
+package com.example.basic_neosextant.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
@@ -217,10 +217,3 @@ val surfaceContainerLowDarkHighContrast = Color(0xFF1D2024)
 val surfaceContainerDarkHighContrast = Color(0xFF2E3036)
 val surfaceContainerHighDarkHighContrast = Color(0xFF393B41)
 val surfaceContainerHighestDarkHighContrast = Color(0xFF45474C)
-
-
-
-
-
-
-

@@ -50,7 +50,7 @@ impl CedarDetect for MyCedarDetect {
 
         let req_image;
         // Shared memory support removed for Android compatibility
-        let using_shmem = false; 
+        let using_shmem = false;
 
         if using_shmem {
              return Err(tonic::Status::internal("Shared memory not supported on this build"))
@@ -173,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .enable_all()
                 .build()
                 .unwrap();
-            
+
             rt.block_on(async {
                 tonic::transport::Server::builder()
                     .max_frame_size(Some(20 * 1024 * 1024)) // 20MB limit
