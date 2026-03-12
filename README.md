@@ -2,13 +2,13 @@
 
 **A modern, real-time celestial navigation tool for Android.**
 
-Neosextant revitalizes the ancient art of celestial navigation, turning your smartphone into a powerful sextant. By capturing images of the night sky, the app performs on-device astrometry (plate-solving) to precisely identify celestial bodies, and uses an advanced iterative solver to calculate your geographic position on Earth—completely offline and without needing a prior estimated position.
+Neosextant tries to bring back the ancient art of celestial navigation, turning your smartphone into a powerful sextant. By capturing images of the night sky, the app performs on-device astrometry (plate-solving) to precisely identify celestial bodies, and uses an advanced iterative solver to calculate your geographic position on Earth—completely offline.
 
 -----
 
 ## What's New?
 The latest versions of Neosextant represent a massive architectural leap:
-*   **Iterative Celestial Solver**: The app no longer requires an Estimated Position (EP) to find your fix. It automatically calculates an initial seed based on the stars' Geographic Positions and refines it using a Least Squares iterative solver for high-precision fixes.
+*   **Iterative Celestial Solver**: The app now uses a more refined way to compute the position using multiple iterative shifts from the original estimated position, recomputing the position until the shift is small enough that you are at this poisiton. With a bit more tinkering, it could normally do the same without an estimated position at all.
 *   **Time Synchronization Engine**: Precise time is critical for celestial navigation. The app now features opportunistic absolute-time syncing via network NTP, with GPS fallbacks.
 *   **History Management**: Persistent viewing, management, and review of all your celestial observations via a local Room database.
 *   **Continuous Calibration**: Automatic calibration tracking, horizon alignment, and a background worker to remind you to recalibrate your sensors for pitch accuracy.
@@ -79,6 +79,16 @@ Neosextant combines modern computer vision with time-tested astronomical calcula
       * Once three valid observations are collected, the internal **Iterative Solver** runs automatically.
       * Your highly-accurate final calculated position (Latitude, Longitude) and estimated error will be displayed!
       * You can view your past fixes in the **History** tab.
+  
+> [!NOTE]
+> Full disclosure, the core of this project (the Python part) was created by myself entirely, but since then I've used AI to port it to Kotlin, a language I'm not fluent in, and to add some functionalities. So if you see any weird code or things like this, please open an issue and we'll try to resolve it !
+
+## Acknowledgements
+
+This project was made possible thanks to the following incredible open-source projects:
+
+* [Cedar-detect](https://github.com/smroid/cedar-detect) - Used for fast and accurate centroid detection.
+* [Tetra3](https://github.com/esa/tetra3) - Handled the fast plate solving part.
 
 ## License
 
