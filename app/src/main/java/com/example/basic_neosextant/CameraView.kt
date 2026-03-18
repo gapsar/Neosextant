@@ -113,12 +113,20 @@ fun CameraView(
     var solverError by remember { mutableStateOf<String?>(null) }
 
 
-    // H-13: Use stable derivedStateOf for LaunchedEffect key
-    val solvedCount by remember { derivedStateOf { capturedImages.count { it.tetra3Result.solved } } }
-    // Navigate to map when 3 images are captured and solved
-    LaunchedEffect(capturedImages.size, solvedCount) {
+    // H-13: Use mode-aware readyCount for LaunchedEffect key to avoid race conditions
+    val readyCount by remember(capturedImages, solverMode) {
+        derivedStateOf {
+            capturedImages.count {
+                if (solverMode == SolverMode.LOP) it.lopData != null
+                else it.tetra3Result.solved
+            }
+        }
+    }
+
+    // Navigate to map when 3 images are captured and fully processed for the current mode
+    LaunchedEffect(capturedImages.size, readyCount) {
         val solvedImages = capturedImages.filter { it.tetra3Result.solved }
-        if (solvedImages.size == 3 && !navigatedToMap) {
+        if (readyCount == 3 && !navigatedToMap) {
             onNavigatedToMapChange(true)
 
             try {
