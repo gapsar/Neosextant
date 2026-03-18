@@ -124,7 +124,7 @@ fun AppNavigator(
                 pressure = pressure,
                 solverMode = solverMode,
                 getCurrentPitch = getCurrentPitch,
-                capturedImages = displayImages.toList(),
+                capturedImages = displayImages,
                 forceSheetExpand = isTutorialResults,
                 onUpdateImage = { updatedImage ->
                     val index = capturedImages.indexOfFirst { it.id == updatedImage.id }
