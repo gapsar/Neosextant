@@ -158,9 +158,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         // Preferred: Accelerometer for Sphere Fitting
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
-        // Keeping Rotation Vector as fallback? No, explicit constraint to use Accel.
-        // rotationVectorSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-
         if (accelerometer == null) {
             Log.e("SensorSetup", "Sensor.TYPE_ACCELEROMETER not available!")
         }

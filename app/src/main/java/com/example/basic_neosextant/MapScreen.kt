@@ -133,10 +133,28 @@ fun MapScreen(
                     },
                     update = { view ->
                         view.overlays.clear() // H-14: Clear stale overlays before adding new ones
+
+                        // Center the map between estimated and computed positions
+                        val centerLat = (estimatedGeoPoint.latitude + computedGeoPoint.latitude) / 2.0
+                        val centerLon = (estimatedGeoPoint.longitude + computedGeoPoint.longitude) / 2.0
                         view.controller.setZoom(12.0)
-                        view.controller.setCenter(estimatedGeoPoint)
-                        addMarker(view, context, estimatedGeoPoint, "Estimated Position")
-                        addMarker(view, context, computedGeoPoint, "Computed Position")
+                        view.controller.setCenter(GeoPoint(centerLat, centerLon))
+
+                        // Dashed offset line between estimated and computed positions
+                        val offsetLine = Polyline()
+                        offsetLine.addPoint(estimatedGeoPoint)
+                        offsetLine.addPoint(computedGeoPoint)
+                        offsetLine.outlinePaint.apply {
+                            color = Color.DKGRAY
+                            strokeWidth = 4f
+                            pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 15f), 0f)
+                            style = android.graphics.Paint.Style.STROKE
+                        }
+                        view.overlays.add(offsetLine)
+
+                        // Markers
+                        addEstimatedMarker(view, context, estimatedGeoPoint)
+                        addComputedMarker(view, context, computedGeoPoint)
 
                         // Draw the LOPs
                         capturedImages.forEachIndexed { index, imageData ->
@@ -227,13 +245,81 @@ fun MapScreen(
     }
 }
 
-private fun addMarker(mapView: MapView, context: Context, geoPoint: GeoPoint, title: String) {
+/**
+ * Estimated Position marker: green hollow circle with crosshairs.
+ * Communicates "approximate / targeting" visually.
+ */
+private fun addEstimatedMarker(mapView: MapView, context: Context, geoPoint: GeoPoint) {
     val marker = Marker(mapView)
     marker.position = geoPoint
-    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-    marker.title = title
+    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+    marker.title = "Estimated Position"
+
+    val size = 48
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val cx = size / 2f
+    val cy = size / 2f
+    val radius = size / 2f - 4f
+
+    // Hollow green circle
+    val circlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#4CAF50")
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 4f
+    }
+    canvas.drawCircle(cx, cy, radius, circlePaint)
+
+    // Crosshair lines
+    val crossPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#4CAF50")
+        strokeWidth = 2.5f
+        style = android.graphics.Paint.Style.STROKE
+    }
+    val gap = 5f // gap in the center of the crosshairs
+    // Horizontal
+    canvas.drawLine(0f, cy, cx - gap, cy, crossPaint)
+    canvas.drawLine(cx + gap, cy, size.toFloat(), cy, crossPaint)
+    // Vertical
+    canvas.drawLine(cx, 0f, cx, cy - gap, crossPaint)
+    canvas.drawLine(cx, cy + gap, cx, size.toFloat(), crossPaint)
+
+    marker.icon = android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
     mapView.overlays.add(marker)
-    mapView.invalidate()
+}
+
+/**
+ * Computed Position marker: solid red circle with a white center dot.
+ * Communicates "confirmed fix" visually.
+ */
+private fun addComputedMarker(mapView: MapView, context: Context, geoPoint: GeoPoint) {
+    val marker = Marker(mapView)
+    marker.position = geoPoint
+    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+    marker.title = "Computed Position"
+
+    val size = 48
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    // Outer solid red circle
+    val outerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#F44336")
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(cx, cy, size / 2f - 2f, outerPaint)
+
+    // White center dot
+    val centerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(cx, cy, 6f, centerPaint)
+
+    marker.icon = android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+    mapView.overlays.add(marker)
 }
 
 private fun addLopLine(mapView: MapView, estimatedPosition: GeoPoint, azimuth: Float, intercept: Float, color: Int) {

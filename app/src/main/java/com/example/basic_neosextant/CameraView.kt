@@ -18,7 +18,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import android.hardware.camera2.CaptureRequest
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -347,9 +349,7 @@ fun CameraView(
                 ) {
                     for (i in 0 until 3) {
                         val imageInfo = capturedImages.getOrNull(i)
-                        val job = imageInfo?.let { analysisJobs[it.id] }
-                        val isProcessing = job?.isActive == true ||
-                                (imageInfo?.tetra3Result?.analysisState == AnalysisState.PENDING)
+                        val isProcessing = imageInfo?.tetra3Result?.analysisState == AnalysisState.PENDING
 
                         ImageSlotView(
                             modifier = Modifier
@@ -404,6 +404,26 @@ fun CameraView(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AndroidView({ previewView }, modifier = Modifier.fillMaxSize())
+
+            // "Shot in progress" overlay
+            if (isTakingPicture) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Color.White)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "Capturing — hold still",
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                }
+            }
 
             // Settings Button (Top Left)
             IconButton(
