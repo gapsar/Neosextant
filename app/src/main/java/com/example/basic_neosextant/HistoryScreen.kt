@@ -30,10 +30,10 @@ fun HistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Position History") },
+                title = { Text(S.positionHistory) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Filled.ArrowBack, contentDescription = S.back)
                     }
                 },
                 actions = {
@@ -42,7 +42,7 @@ fun HistoryScreen(
                             historyRepository.clearAll()
                             entries = historyRepository.getHistory()
                         }) {
-                            Text("Clear All", color = MaterialTheme.colorScheme.error)
+                            Text(S.clearAll, color = MaterialTheme.colorScheme.error)
                         }
                     }
                 },
@@ -60,7 +60,7 @@ fun HistoryScreen(
         ) {
             if (entries.isEmpty()) {
                 Text(
-                    text = "No recorded positions yet.",
+                    text = S.noRecordedPositions,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center)
                 )
@@ -133,7 +133,7 @@ fun HistoryCard(entry: PositionEntry, onDelete: () -> Unit) {
             ) {
                 Icon(
                     imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete entry",
+                    contentDescription = S.deleteEntry,
                     tint = MaterialTheme.colorScheme.onErrorContainer
                 )
             }

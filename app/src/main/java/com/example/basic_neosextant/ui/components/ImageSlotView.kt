@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import coil.compose.rememberAsyncImagePainter
 import com.example.basic_neosextant.model.*
+import com.example.basic_neosextant.S
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -52,7 +53,7 @@ fun ImageSlotView(
             if (imageInfo != null) {
                 Image(
                     painter = rememberAsyncImagePainter(imageInfo.uri),
-                    contentDescription = "Captured image",
+                    contentDescription = S.capturedImage,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop
                 )
@@ -66,7 +67,7 @@ fun ImageSlotView(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Empty")
+                    Text(S.empty)
                 }
             }
         }

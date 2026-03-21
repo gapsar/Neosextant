@@ -39,15 +39,18 @@ fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onNavigateToCalibration: () -> Unit,
     onNavigateToHistory: () -> Unit,
-    onReplayTutorial: () -> Unit
+    onReplayTutorial: () -> Unit,
+    onLocaleChange: (AppLocale) -> Unit
 ) {
+    var showLanguageDialog by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text(S.settings) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Filled.ArrowBack, contentDescription = S.back)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -66,13 +69,13 @@ fun SettingsScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Sensor Calibration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(S.sensorCalibration, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Button(onClick = onNavigateToCalibration, modifier = Modifier.fillMaxWidth()) {
-                Text("Calibrate Sensors")
+                Text(S.calibrateSensors)
             }
 
             Button(onClick = onNavigateToHistory, modifier = Modifier.fillMaxWidth()) {
-                Text("View Position History")
+                Text(S.viewPositionHistory)
             }
 
             Button(
@@ -80,65 +83,74 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
             ) {
-                Text("Replay Tutorial")
+                Text(S.replayTutorial)
             }
+
+            Button(
+                onClick = { showLanguageDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+            ) {
+                Text(S.changeLanguage)
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             Column(modifier = Modifier.tutorialTarget(1)) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-                Text("Vessel Information", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(S.vesselInfo, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 ValidatedNumberField(
                     value = shipSpeed,
                     onValueChange = onShipSpeedChange,
-                    label = "Ship's Speed (knots)",
+                    label = S.shipSpeed,
                     imeAction = ImeAction.Next,
                     validator = { it >= 0.0 },
-                    errorMessage = "Speed cannot be negative",
+                    errorMessage = S.speedNegative,
                     clamp = { it.coerceAtLeast(0.0) },
                     defaultValue = 0.0
                 )
                 ValidatedNumberField(
                     value = shipHeading,
                     onValueChange = onShipHeadingChange,
-                    label = "Ship's Heading (degrees true)",
+                    label = S.shipHeading,
                     imeAction = ImeAction.Next,
                     validator = { it in 0.0..360.0 },
-                    errorMessage = "Heading must be 0-360",
+                    errorMessage = S.headingRange,
                     clamp = { it.coerceIn(0.0, 360.0) },
                     defaultValue = 0.0
                 )
                 ValidatedNumberField(
                     value = initialAltitude,
                     onValueChange = onAltitudeChange,
-                    label = "Height of Eye (m)",
+                    label = S.heightOfEye,
                     imeAction = ImeAction.Done,
                     validator = { it >= -500.0 },
-                    errorMessage = "Height must be at least -500m",
+                    errorMessage = S.heightMin,
                     clamp = { it.coerceAtLeast(-500.0) },
                     defaultValue = 0.0
                 )
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-                Text("Weather Conditions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(S.weatherConditions, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 ValidatedNumberField(
                     value = temperature,
                     onValueChange = onTemperatureChange,
-                    label = "Temperature (°C)",
+                    label = S.temperatureLabel,
                     imeAction = ImeAction.Next,
                     validator = { it >= -273.15 },
-                    errorMessage = "Temperature cannot be below absolute zero",
+                    errorMessage = S.tempAbsZero,
                     clamp = { it.coerceAtLeast(-273.15) },
                     defaultValue = 15.0
                 )
                 ValidatedNumberField(
                     value = pressure,
                     onValueChange = onPressureChange,
-                    label = "Pressure (hPa)",
+                    label = S.pressureLabel,
                     imeAction = ImeAction.Done,
                     validator = { it > 0.0 },
-                    errorMessage = "Pressure must be positive",
+                    errorMessage = S.pressurePositive,
                     clamp = { if (it <= 0.0) 1013.25 else it },
                     defaultValue = 1013.25
                 )
@@ -148,10 +160,9 @@ fun SettingsScreen(
 
             // Solver Mode Toggle
             Column(modifier = Modifier.tutorialTarget(2)) {
-                Text("Solver Mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(S.solverMode, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (solverMode == SolverMode.ITERATIVE) "Iterative: Auto-computes position starting from Estimated Position"
-                    else "LOP: Displays Lines of Position on the map near Estimated Position",
+                    if (solverMode == SolverMode.ITERATIVE) S.iterativeDesc else S.lopDesc,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -163,7 +174,7 @@ fun SettingsScreen(
                         FilterChip(
                             selected = solverMode == mode,
                             onClick = { onSolverModeChange(mode) },
-                            label = { Text(mode.name) },
+                            label = { Text(S.solverModeName(mode)) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -173,29 +184,57 @@ fun SettingsScreen(
             // Estimated position fields (now required for both modes)
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text("Estimated Position", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(S.estimatedPosition, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 ValidatedNumberField(
                     value = initialLatitude,
                     onValueChange = onLatitudeChange,
-                    label = "Latitude (°N)",
+                    label = S.latitudeLabel,
                     imeAction = ImeAction.Next,
                     validator = { it in -90.0..90.0 },
-                    errorMessage = "Latitude must be between -90 and 90",
+                    errorMessage = S.latitudeRange,
                     clamp = { it.coerceIn(-90.0, 90.0) },
                     defaultValue = 0.0
                 )
                 ValidatedNumberField(
                     value = initialLongitude,
                     onValueChange = onLongitudeChange,
-                    label = "Longitude (°E)",
+                    label = S.longitudeLabel,
                     imeAction = ImeAction.Done,
                     validator = { it in -180.0..180.0 },
-                    errorMessage = "Longitude must be between -180 and 180",
+                    errorMessage = S.longitudeRange,
                     clamp = { it.coerceIn(-180.0, 180.0) },
                     defaultValue = 0.0
                 )
             }
         }
+    }
+
+    // Language picker dialog
+    if (showLanguageDialog) {
+        AlertDialog(
+            onDismissRequest = { showLanguageDialog = false },
+            title = { Text(S.changeLanguage) },
+            text = {
+                Column {
+                    AppLocale.entries.forEach { locale ->
+                        TextButton(
+                            onClick = {
+                                onLocaleChange(locale)
+                                showLanguageDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("${locale.flag}  ${locale.displayName}", style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLanguageDialog = false }) {
+                    Text(S.dismiss)
+                }
+            }
+        )
     }
 }
 

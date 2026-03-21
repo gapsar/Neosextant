@@ -101,9 +101,8 @@ fun TutorialOverlay(
         ) {
             when (currentStep) {
                 1 -> NarrationOverlay(
-                    stepLabel = "SETTINGS PAGE",
-                    narrationText = "Welcome to the real app! Here in Settings, you enter your vessel's Speed and Heading if you are moving. " +
-                            "If you are fixed on land, just input Temperature and Pressure to compute atmospheric refraction.",
+                    stepLabel = S.stepSettings,
+                    narrationText = S.narrationSettings,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = false,
@@ -111,9 +110,8 @@ fun TutorialOverlay(
                     highlightRect = targets[1]
                 )
                 2 -> NarrationOverlay(
-                    stepLabel = "SOLVER MODE",
-                    narrationText = "Down here is the Solver Mode toggle. By default, it's on 'Iterative' to automatically triangulate your location. " +
-                            "If you select 'LOP', you'll see the classic celestial navigation intersection lines on the map.",
+                    stepLabel = S.stepSolver,
+                    narrationText = S.narrationSolver,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true,
@@ -121,10 +119,8 @@ fun TutorialOverlay(
                     highlightRect = targets[2]
                 )
                 3 -> NarrationOverlay(
-                    stepLabel = "CALIBRATION — HORIZON",
-                    narrationText = "Now onto the calibration window! First the easy one: the horizon calibration. " +
-                            "This reduces alignment error between the camera and acceleration sensor. " +
-                            "Input your eye height, align the horizon with the red line, and click 'Set Horizon'.",
+                    stepLabel = S.stepCalHorizon,
+                    narrationText = S.narrationCalHorizon,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true,
@@ -132,10 +128,8 @@ fun TutorialOverlay(
                     highlightRect = targets[3]
                 )
                 4 -> NarrationOverlay(
-                    stepLabel = "CALIBRATION — SENSORS",
-                    narrationText = "The second calibration is inherent to phone IMUs — it is called Sphere Fitting. " +
-                            "Click 'Calibrate Sensors', then follow the instructions. Put your phone on each side " +
-                            "and hold it stable. It will vibrate when it reads a clean measurement.",
+                    stepLabel = S.stepCalSensors,
+                    narrationText = S.narrationCalSensors,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true,
@@ -143,10 +137,8 @@ fun TutorialOverlay(
                     highlightRect = targets[4]
                 )
                 5 -> NarrationOverlay(
-                    stepLabel = "TAKING PHOTOS",
-                    narrationText = "Welcome to the sky view. To navigate, just point your phone at the stars. " +
-                            "Take a picture using the bottom button. Note that your phone MUST be as still as possible " +
-                            "(use a tripod if you can).",
+                    stepLabel = S.stepPhotos,
+                    narrationText = S.narrationPhotos,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true,
@@ -154,28 +146,23 @@ fun TutorialOverlay(
                     highlightRect = targets[5]
                 )
                 6 -> NarrationOverlay(
-                    stepLabel = "PHOTO RESULTS",
-                    narrationText = "Once taken, you'll see a thumbnail appear in the lifted panel. Processing takes a few seconds. " +
-                            "You need exactly three successfully solved images to triangulate your position.",
+                    stepLabel = S.stepResults,
+                    narrationText = S.narrationResults,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true,
                     usePointer = false
                 )
                 7 -> NarrationOverlay(
-                    stepLabel = "MAP PAGE (ITERATIVE)",
-                    narrationText = "After 3 images are captured and solved, you'll be brought to the Map! " +
-                            "The Iterative Process mathematically converges your latitude and longitude, starting from your Estimated Position. " +
-                            "It uses least-squares to find the precise fix. Boom! Your location is pinpointed.",
+                    stepLabel = S.stepMapIterative,
+                    narrationText = S.narrationMapIterative,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true
                 )
                 8 -> NarrationOverlay(
-                    stepLabel = "MAP PAGE (LOP)",
-                    narrationText = "If you switch to LOP (Line of Position) mode in Settings, the Map shows " +
-                            "the classic celestial navigation intersection. You will see 3 distinct colored lines " +
-                            "crossing over your Estimated Position, with detailed intercept math available!",
+                    stepLabel = S.stepMapLop,
+                    narrationText = S.narrationMapLop,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true

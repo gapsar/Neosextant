@@ -78,10 +78,10 @@ fun MapScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("LOP Result") },
+                title = { Text(S.mapResult) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Filled.ArrowBack, contentDescription = S.back)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -180,11 +180,11 @@ fun MapScreen(
                 elevation = CardDefaults.cardElevation(2.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Position Details", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(S.positionDetails, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
-                    InfoRow("Computed Position:", "${"%.4f".format(computedGeoPoint.latitude)}, ${"%.4f".format(computedGeoPoint.longitude)}")
-                    InfoRow("Lat/Lon Offset:", "Lat: %.4f, Lon: %.4f".format(computedGeoPoint.latitude - estimatedGeoPoint.latitude, computedGeoPoint.longitude - estimatedGeoPoint.longitude))
-                    InfoRow("Distance Offset:", "%.2f NM".format(distance))
+                    InfoRow(S.computedPosition, "${"%.4f".format(computedGeoPoint.latitude)}, ${"%.4f".format(computedGeoPoint.longitude)}")
+                    InfoRow(S.latLonOffset, "Lat: %.4f, Lon: %.4f".format(computedGeoPoint.latitude - estimatedGeoPoint.latitude, computedGeoPoint.longitude - estimatedGeoPoint.longitude))
+                    InfoRow(S.distanceOffset, "%.2f NM".format(distance))
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -193,7 +193,7 @@ fun MapScreen(
                             onClick = { showDetailsSheet = true },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("View Detailed Calculations")
+                            Text(S.viewDetailedCalc)
                         }
                     }
                 }
@@ -212,7 +212,7 @@ fun MapScreen(
                         .padding(bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text("LOP Detailed Calculations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(S.lopDetailedCalc, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
                     capturedImages.forEachIndexed { index, imageData ->
                         val ra = imageData.tetra3Result.raDeg ?: 0.0
@@ -227,15 +227,15 @@ fun MapScreen(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Text("Observation ${index + 1}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Text(S.observation(index + 1), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.height(4.dp))
-                                InfoRow("Right Ascension (RA):", "%.4f°".format(ra))
-                                InfoRow("Declination (Dec):", "%.4f°".format(dec))
-                                InfoRow("Computed Alt (Hc):", "%.4f°".format(hc))
-                                InfoRow("Observed Alt (Ho):", "%.4f°".format(ho))
+                                InfoRow(S.rightAscension, "%.4f°".format(ra))
+                                InfoRow(S.declinationLabel, "%.4f°".format(dec))
+                                InfoRow(S.computedAlt, "%.4f°".format(hc))
+                                InfoRow(S.observedAlt, "%.4f°".format(ho))
                                 androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                                InfoRow("Intercept:", "%.2f NM".format(intercept))
-                                InfoRow("Azimuth (Zn):", "%.1f°".format(azimuth))
+                                InfoRow(S.intercept, "%.2f NM".format(intercept))
+                                InfoRow(S.azimuthLabel, "%.1f°".format(azimuth))
                             }
                         }
                     }
@@ -253,7 +253,7 @@ private fun addEstimatedMarker(mapView: MapView, context: Context, geoPoint: Geo
     val marker = Marker(mapView)
     marker.position = geoPoint
     marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-    marker.title = "Estimated Position"
+    marker.title = S.get(LocaleManager.getLocale(context), "Estimated Position", "Position estimée", "Posición estimada")
 
     val size = 48
     val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
@@ -296,7 +296,7 @@ private fun addComputedMarker(mapView: MapView, context: Context, geoPoint: GeoP
     val marker = Marker(mapView)
     marker.position = geoPoint
     marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-    marker.title = "Computed Position"
+    marker.title = S.get(LocaleManager.getLocale(context), "Computed Position", "Position calculée", "Posición calculada")
 
     val size = 48
     val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)

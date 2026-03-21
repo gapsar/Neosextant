@@ -141,11 +141,11 @@ private fun StarWarsCrawlStep(onFinished: () -> Unit) {
     data class CrawlLine(val text: String, val isTitle: Boolean)
 
     val crawlLines = listOf(
-        CrawlLine("Welcome to NeoSextant", true),
-        CrawlLine("In this app, the goal is to determine your position on the globe using a centuries old technique :", false),
-        CrawlLine("Astronavigation", true),
-        CrawlLine("Here, no need for expensive sextant, precise time keeping, horizon visibility and hard computations, just take three images of the stars in the sky and boom !", false),
-        CrawlLine("You get your position.", true)
+        CrawlLine(S.crawlWelcome, true),
+        CrawlLine(S.crawlIntro, false),
+        CrawlLine(S.crawlAstronav, true),
+        CrawlLine(S.crawlNoSextant, false),
+        CrawlLine(S.crawlPosition, true)
     )
 
     // Calculate density-aware measurements
@@ -245,7 +245,7 @@ private fun StarWarsCrawlStep(onFinished: () -> Unit) {
         Box(modifier = Modifier.fillMaxSize().clickable { onFinished() })
 
         Text(
-            text = "Tap to skip",
+            text = S.tapToSkip,
             color = Color.White.copy(alpha = 0.4f),
             fontSize = 12.sp,
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
@@ -279,7 +279,7 @@ private fun TransitionStep(onNext: () -> Unit, onSkip: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().padding(32.dp)
             ) {
                 Text(
-                    text = "After this quick and dirty presentation, let's show you a bit around and explain how to use it.",
+                    text = S.tutorialTransition,
                     color = Color.White,
                     fontSize = 20.sp,
                     textAlign = TextAlign.Center,
@@ -294,7 +294,7 @@ private fun TransitionStep(onNext: () -> Unit, onSkip: () -> Unit) {
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF415F91)),
                     modifier = Modifier.fillMaxWidth(0.6f)
                 ) {
-                    Text("Let's go!", fontSize = 18.sp)
+                    Text(S.letsGo, fontSize = 18.sp)
                 }
             }
         }
@@ -303,7 +303,7 @@ private fun TransitionStep(onNext: () -> Unit, onSkip: () -> Unit) {
             onClick = onSkip,
             modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp)
         ) {
-            Text("Skip tutorial", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
+            Text(S.skipTutorial, color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
         }
     }
 }
@@ -381,14 +381,14 @@ fun NarrationOverlay(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(onClick = onSkip) {
-                    Text("End Tour", color = Color.White.copy(alpha = 0.5f))
+                    Text(S.endTour, color = Color.White.copy(alpha = 0.5f))
                 }
 
                 Button(
                     onClick = onNext,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF415F91))
                 ) {
-                    Text("Next")
+                    Text(S.next)
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                 }
