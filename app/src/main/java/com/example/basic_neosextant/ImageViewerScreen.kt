@@ -54,12 +54,12 @@ fun ImageViewerScreen(
                 title = { Text(imageData.name) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close")
+                        Icon(Icons.Filled.Close, contentDescription = S.close)
                     }
                 },
                 actions = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Show Stars", color = MaterialTheme.colorScheme.onSurface)
+                        Text(S.showStars, color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.width(8.dp))
                         Switch(
                             checked = showCentroids,
@@ -130,7 +130,7 @@ fun ImageViewerScreen(
                         .data(imageData.uri)
                         .crossfade(true)
                         .build(),
-                    contentDescription = "Full Screen Image",
+                    contentDescription = S.fullScreenImage,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize()
                 )

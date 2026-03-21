@@ -34,11 +34,16 @@ fun AppNavigator(
     markCalibrationUsed: () -> Unit,
     // Tutorial
     markTutorialCompleted: () -> Unit,
-    showTutorial: Boolean = false
+    showTutorial: Boolean = false,
+    // Locale
+    hasChosenLanguage: Boolean = true
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val vm: NavigationViewModel = viewModel()
+
+    // Locale state
+    var currentLocale by remember { mutableStateOf(LocaleManager.getLocale(context)) }
 
     // C-01: All state now lives in ViewModel, survives config changes
     var latitude by vm.latitude
@@ -57,7 +62,11 @@ fun AppNavigator(
     var showOverlay by vm.showOverlay
     var tutorialStep by vm.tutorialStep
 
-    val startDest = if (showTutorial) "tutorial" else "camera"
+    val startDest = when {
+        !hasChosenLanguage -> "languageSelection"
+        showTutorial -> "tutorial"
+        else -> "camera"
+    }
 
     val historyRepository = remember { HistoryRepository(context) }
 
@@ -95,17 +104,34 @@ fun AppNavigator(
     }
 
     val tutorialTargets = remember { mutableStateMapOf<Int, androidx.compose.ui.geometry.Rect>() }
-    androidx.compose.runtime.CompositionLocalProvider(LocalTutorialTargets provides tutorialTargets) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalTutorialTargets provides tutorialTargets,
+        LocalAppLocale provides currentLocale
+    ) {
         Box(modifier = Modifier.fillMaxSize()) {
             NavHost(navController = navController, startDestination = startDest) {
+            composable("languageSelection") {
+                LanguageSelectionScreen(
+                    onLanguageSelected = { locale ->
+                        LocaleManager.setLocale(context, locale)
+                        currentLocale = locale
+                        val nextRoute = if (showTutorial) "tutorial" else "camera"
+                        navController.navigate(nextRoute) {
+                            popUpTo("languageSelection") { inclusive = true }
+                        }
+                    }
+                )
+            }
             composable("tutorial") {
                 android.util.Log.e("Tutorial", "Composing tutorial route")
                 TutorialScreen(
                     onTutorialComplete = {
+                        markTutorialCompleted()
                         navController.navigate("camera") {
                             popUpTo("tutorial") { inclusive = true }
                         }
                         showOverlay = true
+                        tutorialStep = 1
                     }
                 )
             }
@@ -188,6 +214,10 @@ fun AppNavigator(
                     navController.navigate("tutorial") {
                         popUpTo("camera") { inclusive = false }
                     }
+                },
+                onLocaleChange = { locale ->
+                    LocaleManager.setLocale(context, locale)
+                    currentLocale = locale
                 }
             )
         }

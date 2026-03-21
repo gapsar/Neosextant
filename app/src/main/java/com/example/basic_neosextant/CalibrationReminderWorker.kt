@@ -37,8 +37,9 @@ class CalibrationReminderWorker(appContext: Context, workerParams: WorkerParamet
 
         // Create Channel (Safe to call repeatedly)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Calibration Reminders"
-            val descriptionText = "Reminds you when sensor calibration is old"
+            val locale = LocaleManager.getLocale(applicationContext)
+            val name = S.notifChannelName(locale)
+            val descriptionText = S.notifChannelDesc(locale)
             val importance = NotificationManager.IMPORTANCE_DEFAULT
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = descriptionText
@@ -54,10 +55,11 @@ class CalibrationReminderWorker(appContext: Context, workerParams: WorkerParamet
             applicationContext, 0, intent, PendingIntent.FLAG_IMMUTABLE
         )
 
+        val locale = LocaleManager.getLocale(applicationContext)
         val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_popup_sync) // Generic icon for now
-            .setContentTitle("Sensor Calibration Needed")
-            .setContentText("It's been over 10 days since your last calibration. Recalibrate for best accuracy.")
+            .setSmallIcon(android.R.drawable.ic_popup_sync)
+            .setContentTitle(S.notifTitle(locale))
+            .setContentText(S.notifLongText(locale))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)

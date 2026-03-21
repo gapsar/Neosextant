@@ -118,10 +118,10 @@ fun CalibrationScreen(
         topBar = {
         // ... (No changes to topbar, but for context in replacement)
             TopAppBar(
-                title = { Text("Horizon Calibration") },
+                title = { Text(S.horizonCalibration) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Filled.ArrowBack, contentDescription = S.back)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -171,7 +171,7 @@ fun CalibrationScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "Align the Red Line with the Horizon",
+                    text = S.alignHorizon,
                     color = Color.White,
                     style = MaterialTheme.typography.titleMedium
                 )
@@ -183,7 +183,7 @@ fun CalibrationScreen(
                     OutlinedTextField(
                         value = heightOfEye,
                         onValueChange = { heightOfEye = it },
-                        label = { Text("Height of Eye (m)", color = Color.LightGray) },
+                        label = { Text(S.heightOfEye, color = Color.LightGray) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
@@ -196,13 +196,13 @@ fun CalibrationScreen(
                 }
 
                 Text(
-                    text = "Sensor Pitch: %.2f°".format(currentPitch),
+                    text = S.sensorPitchFmt.format(currentPitch),
                     color = Color.Yellow,
                     style = MaterialTheme.typography.bodyLarge
                 )
 
                  Text(
-                    text = "Current Offset: %.2f°".format(currentOffset),
+                    text = S.currentOffsetFmt.format(currentOffset),
                     color = Color.Gray,
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -213,7 +213,7 @@ fun CalibrationScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
                         modifier = Modifier.weight(1f).tutorialTarget(4)
                     ) {
-                         Text("CALIBRATE SENSORS", maxLines = 1)
+                         Text(S.calibrateSensorsUpper, maxLines = 1)
                     }
 
                     Button(
@@ -232,7 +232,7 @@ fun CalibrationScreen(
                         modifier = Modifier.weight(1f).tutorialTarget(3),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text("SET HORIZON")
+                        Text(S.setHorizon)
                     }
                 }
             }
@@ -273,14 +273,7 @@ fun SphereCalibrationDialog(
     val VARIANCE_THRESHOLD = 0.05f
     val CAPTURE_COUNT = 50
 
-    val steps = listOf(
-        "Screen UP (Z+)",
-        "Screen DOWN (Z-)",
-        "Top Edge UP (Y+)",
-        "Top Edge DOWN (Y-)",
-        "Right Edge UP (X+)",
-        "Left Edge UP (X-)"
-    )
+    val steps = S.sphereSteps
 
     // Initialize calibrator
     DisposableEffect(Unit) {
@@ -382,7 +375,7 @@ fun SphereCalibrationDialog(
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 Text(
-                    text = "Sensor Calibration",
+                    text = S.sensorCalibrationTitle,
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
@@ -397,7 +390,7 @@ fun SphereCalibrationDialog(
                     )
 
                     Text(
-                        text = "Step ${step + 1} / ${steps.size}",
+                        text = S.stepProgressFmt.format(step + 1, steps.size),
                         color = Color.Gray
                     )
 
@@ -412,11 +405,11 @@ fun SphereCalibrationDialog(
 
                     // Status
                     if (waitingForMove) {
-                        Text("Change Position!", color = Color.Yellow, style = MaterialTheme.typography.titleMedium)
+                        Text(S.changePositionAlert, color = Color.Yellow, style = MaterialTheme.typography.titleMedium)
                     } else if (isStable) {
-                        Text("Hold Still... Recording...", color = Color.Green, style = MaterialTheme.typography.titleMedium)
+                        Text(S.holdStillRecording, color = Color.Green, style = MaterialTheme.typography.titleMedium)
                     } else {
-                        Text("Keep device steady", color = Color.Red, style = MaterialTheme.typography.titleMedium)
+                        Text(S.keepDeviceSteady, color = Color.Red, style = MaterialTheme.typography.titleMedium)
                     }
 
                     // Debug Raw
@@ -430,13 +423,13 @@ fun SphereCalibrationDialog(
                     // DONE
                     Icon(
                         imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = "Done",
+                        contentDescription = S.done,
                         tint = Color.Green,
                         modifier = Modifier.size(64.dp)
                     )
 
                     Text(
-                        text = "Calibration Complete!",
+                        text = S.calibrationComplete,
                         style = MaterialTheme.typography.headlineMedium,
                         color = Color.White
                     )
@@ -450,7 +443,7 @@ fun SphereCalibrationDialog(
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.Green)
                     ) {
-                        Text("SAVE CONFIGURATION", color = Color.Black)
+                        Text(S.saveConfiguration, color = Color.Black)
                     }
                 }
             }

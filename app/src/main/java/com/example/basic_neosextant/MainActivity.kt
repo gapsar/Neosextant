@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             if (isGranted) {
                 val showTutorial = shouldShowTutorial()
+                val hasLang = LocaleManager.hasChosenLanguage(this)
                 android.util.Log.e("Tutorial", "Camera granted, showTutorial=$showTutorial")
                 setContent {
                     Basic_neosextantTheme {
@@ -78,7 +79,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             supportsManualExposure = supportsManualExposure(),
                             markCalibrationUsed = sensorCalibrator::markCalibrationUsed,
                             markTutorialCompleted = ::markTutorialCompleted,
-                            showTutorial = showTutorial
+                            showTutorial = showTutorial,
+                            hasChosenLanguage = hasLang
                         )
                     }
                 }
@@ -120,6 +122,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         if (allPermissionsGranted()) {
             val showTutorial = shouldShowTutorial()
+            val hasLang = LocaleManager.hasChosenLanguage(this)
             android.util.Log.e("Tutorial", "showTutorial=$showTutorial")
             setContent {
                 Basic_neosextantTheme {
@@ -136,7 +139,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         supportsManualExposure = supportsManualExposure(),
                         markCalibrationUsed = sensorCalibrator::markCalibrationUsed,
                         markTutorialCompleted = ::markTutorialCompleted,
-                        showTutorial = showTutorial
+                        showTutorial = showTutorial,
+                        hasChosenLanguage = hasLang
                     )
                 }
             }
@@ -175,22 +179,23 @@ class MainActivity : ComponentActivity(), SensorEventListener {
              Log.w("Calibration", "Device needs sensor calibration!")
              // Send real system notification
              val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+             val locale = LocaleManager.getLocale(this)
              if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                 val channel = android.app.NotificationChannel(
-                     CalibrationReminderWorker.CHANNEL_ID,
-                     "Calibration Reminders",
-                     android.app.NotificationManager.IMPORTANCE_DEFAULT
-                 ).apply { description = "Reminds you when sensor calibration is needed" }
+                  val channel = android.app.NotificationChannel(
+                      CalibrationReminderWorker.CHANNEL_ID,
+                      S.notifChannelName(locale),
+                      android.app.NotificationManager.IMPORTANCE_DEFAULT
+                  ).apply { description = S.notifChannelDesc(locale) }
                  notificationManager.createNotificationChannel(channel)
              }
              val intent = android.content.Intent(this, MainActivity::class.java).apply {
                  flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
              }
              val pendingIntent = android.app.PendingIntent.getActivity(this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE)
-             val notification = androidx.core.app.NotificationCompat.Builder(this, CalibrationReminderWorker.CHANNEL_ID)
-                 .setSmallIcon(android.R.drawable.ic_popup_sync)
-                 .setContentTitle("Sensor Calibration Needed")
-                 .setContentText("Recalibrate your sensors for best accuracy.")
+              val notification = androidx.core.app.NotificationCompat.Builder(this, CalibrationReminderWorker.CHANNEL_ID)
+                  .setSmallIcon(android.R.drawable.ic_popup_sync)
+                  .setContentTitle(S.notifTitle(locale))
+                  .setContentText(S.notifText(locale))
                  .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
                  .setContentIntent(pendingIntent)
                  .setAutoCancel(true)

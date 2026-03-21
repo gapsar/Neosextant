@@ -396,7 +396,7 @@ fun CameraView(
                             .height(180.dp), // Approx height of the metadata card
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("Select an image to see details", style = MaterialTheme.typography.bodyMedium)
+                        Text(S.selectImage, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
@@ -417,7 +417,7 @@ fun CameraView(
                         CircularProgressIndicator(color = Color.White)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            "Capturing — hold still",
+                            S.capturingHoldStill,
                             color = Color.White,
                             style = MaterialTheme.typography.titleMedium
                         )
@@ -434,7 +434,7 @@ fun CameraView(
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
+                    contentDescription = S.settings,
                     modifier = Modifier.size(40.dp)
                 )
             }
@@ -453,7 +453,7 @@ fun CameraView(
                 }) {
                     Icon(
                         imageVector = Icons.Default.Map,
-                        contentDescription = "Go to Map",
+                        contentDescription = S.goToMap,
                         modifier = Modifier.size(40.dp)
                     )
                 }
@@ -663,7 +663,7 @@ fun CameraView(
                 }) {
                     Icon(
                         imageVector = Icons.Outlined.CameraAlt,
-                        contentDescription = "Take picture",
+                        contentDescription = S.takePicture,
                         modifier = Modifier.size(60.dp)
                     )
                 }
@@ -675,11 +675,11 @@ fun CameraView(
     if (solverError != null) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { solverError = null },
-            title = { androidx.compose.material3.Text("Navigation Failed") },
+            title = { androidx.compose.material3.Text(S.navigationFailed) },
             text = { androidx.compose.material3.Text(solverError!!) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { solverError = null }) {
-                    androidx.compose.material3.Text("Dismiss")
+                    androidx.compose.material3.Text(S.dismiss)
                 }
             }
         )
