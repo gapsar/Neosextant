@@ -109,12 +109,13 @@ git clone https://github.com/gapsar/Neosextant.git
 
 ## Usage Guide
 
-1. **Choose Your Language** — On first launch, pick English, French, or Spanish.
-2. **Follow the Tutorial** — The interactive onboarding walks you through every screen.
-3. **Calibrate Your Sensors** — Go to Settings → *Calibrate from Horizon*. Align your phone with a flat, level horizon to correct for pitch sensor manufacturing errors. This is **critical** for accuracy.
+1. **Choose Your Language** — On first launch, pick English, French, or Spanish. You can also change this later in Settings → System Parameters.
+2. **Follow the Tutorial** — The interactive onboarding walks you through every screen. It can be replayed from Settings → System Parameters.
+3. **Calibrate Your Sensors** — Go to Settings → *Calibrate Sensors*. Align your phone with a flat, level horizon to correct for pitch sensor manufacturing errors. This is **critical** for accuracy.
 4. **Take 3 Observations** — Aim your camera at different parts of the night sky. After each capture, the app plate-solves the image and displays the result. Spread your observations across different directions for the strongest fix.
-5. **Get Your Position** — After 3 valid observations, the solver runs automatically. Your calculated latitude, longitude, and estimated error are displayed, and your position is plotted on the map.
-6. **Review History** — Access all past fixes from the History tab.
+5. **Get Your Position** — After 3 valid observations, the app automatically navigates to the map screen. Your calculated latitude, longitude, and estimated error are displayed, and your position is plotted on the map.
+6. **Review History** — Access all past fixes from Settings → *View Position History*.
+7. **Red Tint Mode** — Preserve your night vision by toggling Red Tint Mode in Settings → System Parameters.
 
 ---
 

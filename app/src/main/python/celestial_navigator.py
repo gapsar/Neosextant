@@ -510,7 +510,7 @@ def solve_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.0, p
         obs_list = json.loads(obs_list_json)
 
         if len(obs_list) < 2:
-            return json.dumps({"error": "Need at least 2 observations for iterative solve"})
+            return json.dumps({"error": "Need at least 3 observations for iterative solve"})
 
         # 1. Parse Times
         times = []

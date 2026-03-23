@@ -18,17 +18,19 @@ This is the main interaction screen.
     * *Night Mode:* Checks for `ExtensionMode.NIGHT` support to enhance star visibility.
     * *Fallback:* If night mode is unavailable, it manually configures the camera for high sensitivity (ISO 1600) and longer exposure (200ms).
 * **Workflow:**
-    * User captures an image.
+    * User captures an image. A visual indicator briefly shows that a picture was taken.
     * The app averages the sensor pitch readings during the image capture delay to reduce noise.
     * This averaged pitch is adjusted by the **Calibration Offset**.
     * A background coroutine launches the Python `image_processor`.
-    * State is managed via `capturedImages` (a `SnapshotStateList`), which triggers UI updates upon success/failure of the analysis.
+    * State is managed via `capturedImages` (a `SnapshotStateList`), which triggers UI updates upon success/failure of the analysis. A loading animation runs on the image card while processing and clears to show a green or red border once solved/failed.
+    * Once 3 images are successfully solved, the app automatically navigates the user to the `MapScreen`.
 
 ### 2. SettingsScreen
 Allows the user to input Dead Reckoning (DR) data required for the sight reduction:
-* Estimated Latitude/Longitude.
+* Estimated Latitude/Longitude (required for both LOP and Iterative solver modes).
 * Vessel speed and heading.
 * Environmental data (Temperature/Pressure) for refraction corrections.
+* **System Parameters:** A dialog providing access to Red Tint Mode (preserves night vision by applying a red color matrix filter), Replay Tutorial, and Change Language options (supports English, French, Spanish).
 
 ### 3. CalibrationScreen
 A utility screen to calibrate the device's accelerometer/gyroscope zero-point against the true horizon.

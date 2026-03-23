@@ -4,8 +4,9 @@
 Before taking sights, ensure the app is calibrated and has your estimated position.
 
 1.  **Settings:** Navigate to the Settings screen (Gear icon).
-    * Enter your **Estimated Latitude** and **Longitude**. This is your Dead Reckoning (DR) position.
-    * Enter the **Height of Eye** (distance from sea level to the phone camera).
+    * Enter your **Estimated Latitude** and **Longitude**. This is your Dead Reckoning (DR) position, required for both LOP and Iterative solver modes for now, even though it is not used in the latter.
+    * Enter the **Height of Eye** (distance from sea level to the phone camera) and environmental conditions.
+    * **System Parameters:** Tap "System Parameters" to toggle **Red Tint Mode** (for preserving night vision), change the **Language** (English, French, Spanish), or replay the interactive tutorial.
 2.  **Calibration:**
     * Go to **Calibrate Horizon** from settings.
     * Hold the phone upright.
@@ -27,7 +28,7 @@ Before taking sights, ensure the app is calibrated and has your estimated positi
 * Tap on a thumbnail to see detailed data (Star names, RA/Dec, calculated Intercept).
 
 ## 4. The Fix
-* Once 3 images are successfully solved, a **Map Icon** will appear in the top right.
-* Tap the Map Icon to view your position.
+* Once 3 images are successfully solved, the app will automatically navigate to the Map tab.
+* Alternatively, you can manually tap the Map Icon in the navigation bar to view your position.
     * **Red/Green/Blue Lines:** Your Lines of Position.
     * **Markers:** Comparison between your estimated position and the calculated celestial fix.
