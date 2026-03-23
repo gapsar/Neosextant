@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "basic_neosextant"
+rootProject.name = "Neosextant"
 include(":app")
  

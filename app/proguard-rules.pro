@@ -26,7 +26,7 @@
 -keepclassmembers class com.chaquo.python.** { *; }
 
 # Keep app data classes that may be accessed reflectively
--keep class com.example.basic_neosextant.** { *; }
+-keep class com.example.neosextant.** { *; }
 
 # Keep Astropy/numpy native bindings
 -keepclassmembers class * {
