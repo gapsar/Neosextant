@@ -25,6 +25,7 @@ __pycache__/
 .jdk17/
 jdk17/
 releases/
+*.aab
 
 # Keystore release
 *.jks
