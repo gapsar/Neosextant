@@ -25,3 +25,7 @@ __pycache__/
 .jdk17/
 jdk17/
 releases/
+
+# Keystore release
+*.jks
+*.keystore

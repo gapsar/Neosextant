@@ -15,11 +15,11 @@ if (localPropsFile.exists()) { localProps.load(localPropsFile.inputStream()) }
 val chaquopyPython = localProps.getProperty("chaquopy.python", "python3")
 
 android {
-    namespace = "com.example.neosextant"
+    namespace = "io.github.gapsar.neosextant"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.neosextant"
+        applicationId = "io.github.gapsar.neosextant"
         minSdk = 25
         targetSdk = 35
         versionCode = 1
