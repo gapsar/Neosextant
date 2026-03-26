@@ -47,6 +47,7 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
     var computedLatitude = mutableStateOf<Double?>(null)
     var computedLongitude = mutableStateOf<Double?>(null)
     var viewerImageInfo = mutableStateOf<ImageData?>(null)
+    var historicalEntry = mutableStateOf<PositionEntry?>(null)
 
     // Tutorial state
     var showOverlay = mutableStateOf(false)

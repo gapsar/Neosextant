@@ -12,7 +12,10 @@ data class PositionEntryEntity(
     val latitude: Double,
     val longitude: Double,
     val errorEstimateNm: Double?,
-    val mode: String
+    val mode: String,
+    val estimatedLatitude: Double = 0.0,
+    val estimatedLongitude: Double = 0.0,
+    val imagesJson: String? = null
 ) {
     fun toPositionEntry(): PositionEntry {
         return PositionEntry(
@@ -21,7 +24,10 @@ data class PositionEntryEntity(
             latitude = latitude,
             longitude = longitude,
             errorEstimateNm = errorEstimateNm,
-            mode = mode
+            mode = mode,
+            estimatedLatitude = estimatedLatitude,
+            estimatedLongitude = estimatedLongitude,
+            imagesJson = imagesJson
         )
     }
 
@@ -33,7 +39,10 @@ data class PositionEntryEntity(
                 latitude = entry.latitude,
                 longitude = entry.longitude,
                 errorEstimateNm = entry.errorEstimateNm,
-                mode = entry.mode
+                mode = entry.mode,
+                estimatedLatitude = entry.estimatedLatitude,
+                estimatedLongitude = entry.estimatedLongitude,
+                imagesJson = entry.imagesJson
             )
         }
     }

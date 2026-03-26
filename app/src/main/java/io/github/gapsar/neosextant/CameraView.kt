@@ -224,16 +224,93 @@ fun CameraView(
 
                 onComputedLatitudeChange(finalLatitude)
                 onComputedLongitudeChange(finalLongitude)
+                
+                // M-17: Delayed Image Compression & Downscaling with Centroid Drawings
+                val finalImages = solvedImages.mapNotNull { img ->
+                    val path = img.uri.path ?: return@mapNotNull null
+                    try {
+                        val originalFile = java.io.File(path)
+                        if (originalFile.exists() && originalFile.length() > 0) {
+                            val bitmap = android.graphics.BitmapFactory.decodeFile(path)
+                            if (bitmap != null) {
+                                val needsRotation = try {
+                                    val exif = androidx.exifinterface.media.ExifInterface(path)
+                                    val orientation = exif.getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL)
+                                    orientation == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 || orientation == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270
+                                } catch (e: Exception) {
+                                    bitmap.width > bitmap.height
+                                }
+                                
+                                val postRotationWidth = if (needsRotation) bitmap.height else bitmap.width
+                                val postRotationHeight = if (needsRotation) bitmap.width else bitmap.height
+                                
+                                var finalBitmap = if (needsRotation) {
+                                    val matrix = android.graphics.Matrix().apply { postRotate(90f) }
+                                    android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                                } else {
+                                    bitmap
+                                }
+                                
+                                // Scale down to max 1024
+                                val maxDimension = 1024
+                                if (finalBitmap.width > maxDimension || finalBitmap.height > maxDimension) {
+                                    val ratio = Math.min(maxDimension.toFloat() / finalBitmap.width, maxDimension.toFloat() / finalBitmap.height)
+                                    val newWidth = (finalBitmap.width * ratio).toInt()
+                                    val newHeight = (finalBitmap.height * ratio).toInt()
+                                    val scaledBitmap = android.graphics.Bitmap.createScaledBitmap(finalBitmap, newWidth, newHeight, true)
+                                    if (finalBitmap != bitmap) finalBitmap.recycle()
+                                    finalBitmap = scaledBitmap
+                                }
+                                
+                                // Draw Centroids
+                                val canvas = android.graphics.Canvas(finalBitmap)
+                                val paint = android.graphics.Paint().apply {
+                                    color = android.graphics.Color.YELLOW
+                                    style = android.graphics.Paint.Style.STROKE
+                                    strokeWidth = 6f
+                                    isAntiAlias = true
+                                }
+                                
+                                val scaleX = finalBitmap.width.toFloat() / postRotationWidth.toFloat()
+                                val scaleY = finalBitmap.height.toFloat() / postRotationHeight.toFloat()
+                                
+                                img.tetra3Result.centroids.forEach { c ->
+                                    val cx = (c.first * scaleX).toFloat()
+                                    val cy = (c.second * scaleY).toFloat()
+                                    canvas.drawCircle(cx, cy, 18f, paint)
+                                }
+                                
+                                val outputStream = java.io.FileOutputStream(originalFile)
+                                finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 60, outputStream)
+                                outputStream.flush()
+                                outputStream.close()
+                                
+                                if (finalBitmap != bitmap) finalBitmap.recycle()
+                                bitmap.recycle()
+                                Log.d("ImageCompression", "Compressed, downscaled, and annotated ${img.name}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("CameraView", "Failed to compress scaled image", e)
+                    }
+                    img
+                }
 
                 // Save to History Repository
                 val modeStr = if (solverMode == SolverMode.ITERATIVE) "ITERATIVE" else "LOP"
+                // Serializer is used to store images alongside the history
+                val imagesJsonStr = HistoryRepository.serializeImages(finalImages)
+                
                 historyRepository.saveEntry(
                     PositionEntry(
                         timestampStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(TimeSynchronizer.getTrueTime()),
                         latitude = finalLatitude,
                         longitude = finalLongitude,
                         errorEstimateNm = if (shiftNm.isNaN()) null else shiftNm,
-                        mode = modeStr
+                        mode = modeStr,
+                        estimatedLatitude = latitude.toDoubleOrNull() ?: 0.0,
+                        estimatedLongitude = longitude.toDoubleOrNull() ?: 0.0,
+                        imagesJson = imagesJsonStr
                     )
                 )
 
@@ -386,6 +463,11 @@ fun CameraView(
                         imageInfo = selectedImageInfo!!,
                         onRemoveClick = {
                             analysisJobs.remove(selectedImageInfo!!.id)?.cancel()
+                            try {
+                                selectedImageInfo!!.uri.path?.let { java.io.File(it).delete() }
+                            } catch (e: Exception) {
+                                Log.e("CameraView", "Failed to delete image file", e)
+                            }
                             onRemoveImage(selectedImageInfo!!)
                             selectedImageInfo = null
                             if (capturedImages.size < 3) { // Reset navigation flag
@@ -617,33 +699,7 @@ fun CameraView(
                                                 onUpdateImage(finalImageData)
                                                 selectedImageInfo = finalImageData
                                             }
-
-                                            // --- Image Compression ---
-                                            // Compress the image after all solving is done to save disk space
-                                            try {
-                                                val originalFile = java.io.File(path)
-                                                if (originalFile.exists() && originalFile.length() > 0) {
-                                                    val bitmap = android.graphics.BitmapFactory.decodeFile(path)
-                                                    if (bitmap != null) {
-                                                        val finalBitmap = if (needsRotation) {
-                                                            val matrix = android.graphics.Matrix().apply { postRotate(90f) }
-                                                            android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                                                        } else {
-                                                            bitmap
-                                                        }
-                                                        val outputStream = java.io.FileOutputStream(originalFile)
-                                                        finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 40, outputStream)
-                                                        outputStream.flush()
-                                                        outputStream.close()
-                                                        if (finalBitmap != bitmap) finalBitmap.recycle()
-                                                        bitmap.recycle()
-                                                        Log.d("ImageCompression", "Successfully compressed and rotated $imageName")
-                                                    }
-                                                }
-                                            } catch (e: Exception) {
-                                                Log.e("ImageCompression", "Failed to compress $imageName", e)
-                                            }
-
+                                            // Image Compression has been moved to navigate-to-map to keep original quality during analysis
                                         } catch (e: Exception) {
                                             Log.e("PythonExecution", "Error processing image or LOP", e)
                                             val errorResult = Tetra3AnalysisResult(analysisState = AnalysisState.FAILURE, errorMessage = e.message)

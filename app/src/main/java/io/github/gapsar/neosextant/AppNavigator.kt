@@ -258,8 +258,26 @@ fun AppNavigator(
         composable("history") {
             HistoryScreen(
                 onNavigateBack = { navController.popBackStack() },
-                historyRepository = historyRepository
+                historyRepository = historyRepository,
+                onViewOnMap = { entry ->
+                    vm.historicalEntry.value = entry
+                    navController.navigate("historyMap")
+                }
             )
+        }
+        composable("historyMap") {
+            val entry = vm.historicalEntry.value
+            if (entry != null) {
+                val images = remember(entry) { HistoryRepository.deserializeImages(entry.imagesJson) }
+                MapScreen(
+                    navController = navController,
+                    estimatedLatitude = entry.estimatedLatitude.toString(),
+                    estimatedLongitude = entry.estimatedLongitude.toString(),
+                    capturedImages = images,
+                    computedLatitude = entry.latitude,
+                    computedLongitude = entry.longitude
+                )
+            }
         }
         composable("imageViewer") {
             viewerImageInfo?.let { image ->

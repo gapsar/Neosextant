@@ -97,6 +97,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         android.util.Log.e("Tutorial", "=== onCreate START ===")
         // OSMDroid configuration
         Configuration.getInstance().load(this, PreferenceManager.getDefaultSharedPreferences(this))
+        
+        // Ensure Chaquopy temp dir exists to prevent offline startup crash
+        val chaquopyTmpDir = java.io.File(cacheDir, "chaquopy/tmp")
+        if (!chaquopyTmpDir.exists()) {
+            chaquopyTmpDir.mkdirs()
+        }
+        
         if (!com.chaquo.python.Python.isStarted()) {
             com.chaquo.python.Python.start(com.chaquo.python.android.AndroidPlatform(this))
         }

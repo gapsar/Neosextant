@@ -22,7 +22,8 @@ import java.util.Locale
 @Composable
 fun HistoryScreen(
     onNavigateBack: () -> Unit,
-    historyRepository: HistoryRepository
+    historyRepository: HistoryRepository,
+    onViewOnMap: (PositionEntry) -> Unit
 ) {
     // State to hold the list of entries
     var entries by remember { mutableStateOf(historyRepository.getHistory()) }
@@ -73,6 +74,7 @@ fun HistoryScreen(
                     items(entries, key = { it.id }) { entry ->
                         HistoryCard(
                             entry = entry,
+                            onClick = { onViewOnMap(entry) },
                             onDelete = {
                                 historyRepository.deleteEntry(entry.id)
                                 entries = historyRepository.getHistory()
@@ -86,7 +88,7 @@ fun HistoryScreen(
 }
 
 @Composable
-fun HistoryCard(entry: PositionEntry, onDelete: () -> Unit) {
+fun HistoryCard(entry: PositionEntry, onClick: () -> Unit, onDelete: () -> Unit) {
     val latStr = String.format(Locale.US, "%.5f°", entry.latitude)
     val lonStr = String.format(Locale.US, "%.5f°", entry.longitude)
     val errStr = if (entry.errorEstimateNm != null) {
@@ -96,7 +98,8 @@ fun HistoryCard(entry: PositionEntry, onDelete: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        onClick = onClick
     ) {
         Row(
             modifier = Modifier
