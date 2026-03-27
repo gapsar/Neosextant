@@ -104,6 +104,9 @@ fun CameraView(
             extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             extender.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, 1600)
             extender.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, 200_000_000L) // 200ms in nanoseconds
+            // Lock focus to infinity for star photography
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+            extender.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, 0.0f)
         } else if (!isNightModeAvailable) {
             // Fallback: hint high ISO via auto exposure
             Log.w("CameraView", "Manual exposure not supported, using auto exposure")
