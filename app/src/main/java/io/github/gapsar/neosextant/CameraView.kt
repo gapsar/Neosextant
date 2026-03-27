@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -69,6 +70,7 @@ fun CameraView(
     onAddImage: (ImageData) -> Unit,
     onUpdateImage: (ImageData) -> Unit,
     onRemoveImage: (ImageData) -> Unit,
+    onRemoveAllImages: () -> Unit,
     onImageLongClick: (ImageData) -> Unit,
     navigatedToMap: Boolean,
     onNavigatedToMapChange: (Boolean) -> Unit,
@@ -467,14 +469,37 @@ fun CameraView(
                         }
                     )
                 } else {
-                    // Optional: Show a placeholder when no image is selected to maintain layout stability
+                    // Show "Remove All" when images exist but none selected; otherwise placeholder
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(180.dp), // Approx height of the metadata card
+                            .height(180.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(S.selectImage, style = MaterialTheme.typography.bodyMedium)
+                        if (capturedImages.isNotEmpty()) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(S.selectImage, style = MaterialTheme.typography.bodyMedium)
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(
+                                    onClick = {
+                                        onRemoveAllImages()
+                                        onNavigatedToMapChange(false)
+                                        onComputedLatitudeChange(null)
+                                        onComputedLongitudeChange(null)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                ) {
+                                    Icon(Icons.Filled.Delete, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(S.removeAllImages)
+                                }
+                            }
+                        } else {
+                            Text(S.selectImage, style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
                 }
             }

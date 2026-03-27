@@ -194,6 +194,21 @@ fun AppNavigator(
                     }
                     capturedImages.remove(imageToRemove)
                 },
+                onRemoveAllImages = {
+                    // Delete all active image files, but history copies are safe
+                    capturedImages.forEach { imageToRemove ->
+                        try {
+                            val filePath = imageToRemove.uri.path
+                            if (filePath != null) {
+                                val file = File(filePath)
+                                if (file.exists()) file.delete()
+                            }
+                        } catch (e: Exception) {
+                            Log.w("AppNavigator", "Failed to delete image file", e)
+                        }
+                    }
+                    capturedImages.clear()
+                },
                 onImageLongClick = { image ->
                     viewerImageInfo = image
                     navController.navigate("imageViewer")

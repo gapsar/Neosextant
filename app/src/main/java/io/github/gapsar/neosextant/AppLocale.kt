@@ -308,6 +308,7 @@ object S {
     val errorLabel: String @Composable get() = s("Error:", "Erreur :", "Error:")
     val reasonLabel: String @Composable get() = s("Reason:", "Raison :", "Razón:")
     val removeImage: String @Composable get() = s("Remove Image", "Supprimer l’image", "Eliminar la imagen")
+    val removeAllImages: String @Composable get() = s("Remove All Images", "Supprimer toutes les images", "Eliminar todas las imágenes")
     val raLabel: String @Composable get() = s("RA:", "AD :", "AR:")
     val decLabel: String @Composable get() = s("Dec:", "Déc :", "Dec:")
     val interceptNm: String @Composable get() = s("Intercept:", "Intercept :", "Intercepto:")
