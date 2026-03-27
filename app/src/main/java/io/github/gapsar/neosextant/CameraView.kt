@@ -228,7 +228,10 @@ fun CameraView(
                 onComputedLatitudeChange(finalLatitude)
                 onComputedLongitudeChange(finalLongitude)
                 
-                // M-17: Delayed Image Compression & Downscaling with Centroid Drawings
+                // M-17: Delayed Image Compression & Downscaling — copy to history dir
+                val historyDir = java.io.File(context.getExternalFilesDir(null), "history_images")
+                historyDir.mkdirs()
+                
                 val finalImages = solvedImages.mapNotNull { img ->
                     val path = img.uri.path ?: return@mapNotNull null
                     try {
@@ -243,9 +246,6 @@ fun CameraView(
                                 } catch (e: Exception) {
                                     bitmap.width > bitmap.height
                                 }
-                                
-                                val postRotationWidth = if (needsRotation) bitmap.height else bitmap.width
-                                val postRotationHeight = if (needsRotation) bitmap.width else bitmap.height
                                 
                                 var finalBitmap = if (needsRotation) {
                                     val matrix = android.graphics.Matrix().apply { postRotate(90f) }
@@ -265,43 +265,29 @@ fun CameraView(
                                     finalBitmap = scaledBitmap
                                 }
                                 
-                                // Draw Centroids
-                                val canvas = android.graphics.Canvas(finalBitmap)
-                                val paint = android.graphics.Paint().apply {
-                                    color = android.graphics.Color.YELLOW
-                                    style = android.graphics.Paint.Style.STROKE
-                                    strokeWidth = 6f
-                                    isAntiAlias = true
-                                }
-                                
-                                val scaleX = finalBitmap.width.toFloat() / postRotationWidth.toFloat()
-                                val scaleY = finalBitmap.height.toFloat() / postRotationHeight.toFloat()
-                                
-                                img.tetra3Result.centroids.forEach { c ->
-                                    val cx = (c.first * scaleX).toFloat()
-                                    val cy = (c.second * scaleY).toFloat()
-                                    canvas.drawCircle(cx, cy, 18f, paint)
-                                }
-                                
-                                val outputStream = java.io.FileOutputStream(originalFile)
+                                // Save compressed copy to history directory
+                                val historyFile = java.io.File(historyDir, img.name)
+                                val outputStream = java.io.FileOutputStream(historyFile)
                                 finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 60, outputStream)
                                 outputStream.flush()
                                 outputStream.close()
                                 
                                 if (finalBitmap != bitmap) finalBitmap.recycle()
                                 bitmap.recycle()
-                                Log.d("ImageCompression", "Compressed, downscaled, and annotated ${img.name}")
+                                Log.d("ImageCompression", "Compressed and saved to history: ${img.name}")
+                                
+                                // Return image with updated URI pointing to history copy
+                                return@mapNotNull img.copy(uri = Uri.fromFile(historyFile))
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e("CameraView", "Failed to compress scaled image", e)
+                        Log.e("CameraView", "Failed to compress image for history", e)
                     }
                     img
                 }
 
                 // Save to History Repository
                 val modeStr = if (solverMode == SolverMode.ITERATIVE) "ITERATIVE" else "LOP"
-                // Serializer is used to store images alongside the history
                 val imagesJsonStr = HistoryRepository.serializeImages(finalImages)
                 
                 historyRepository.saveEntry(
