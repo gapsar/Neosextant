@@ -24,8 +24,8 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
     private val prefs = application.getSharedPreferences("neosextant_prefs", Context.MODE_PRIVATE)
 
     // --- Settings (persisted) ---
-    var latitude = mutableStateOf(prefs.getString("est_latitude", "49.49") ?: "49.49")
-    var longitude = mutableStateOf(prefs.getString("est_longitude", "0.11") ?: "0.11")
+    var latitude = mutableStateOf(prefs.getString("est_latitude", "0") ?: "0")
+    var longitude = mutableStateOf(prefs.getString("est_longitude", "0") ?: "0")
     var altitude = mutableStateOf(prefs.getString("est_altitude", "20") ?: "20")
     var shipSpeed = mutableStateOf(prefs.getString("ship_speed", "") ?: "")
     var shipHeading = mutableStateOf(prefs.getString("ship_heading", "") ?: "")
