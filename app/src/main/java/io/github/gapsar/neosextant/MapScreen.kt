@@ -113,103 +113,102 @@ fun MapScreen(
                             .fillMaxWidth()
                             .height(400.dp),
                         factory = {
-                        mapView.apply {
-                            setMultiTouchControls(true)
+                            mapView.apply {
+                                setMultiTouchControls(true)
 
-                            // 1. Configure OSMDroid Cache Directory
-                            val basePath = java.io.File(context.getExternalFilesDir(null), "osmdroid")
-                            basePath.mkdirs()
-                            org.osmdroid.config.Configuration.getInstance().osmdroidBasePath = basePath
-                            org.osmdroid.config.Configuration.getInstance().osmdroidTileCache = basePath
+                                // 1. Configure OSMDroid Cache Directory
+                                val basePath = java.io.File(context.getExternalFilesDir(null), "osmdroid")
+                                basePath.mkdirs()
+                                org.osmdroid.config.Configuration.getInstance().osmdroidBasePath = basePath
+                                org.osmdroid.config.Configuration.getInstance().osmdroidTileCache = basePath
 
-                            // Copy basemap if needed
-                            val basemapFile = java.io.File(basePath, "world_basemap.mbtiles")
-                            if (!basemapFile.exists()) {
-                                try {
-                                    context.assets.open("world_basemap.mbtiles").use { input ->
-                                        java.io.FileOutputStream(basemapFile).use { output ->
-                                            input.copyTo(output)
+                                // Copy basemap if needed
+                                val basemapFile = java.io.File(basePath, "world_basemap.mbtiles")
+                                if (!basemapFile.exists()) {
+                                    try {
+                                        context.assets.open("world_basemap.mbtiles").use { input ->
+                                            java.io.FileOutputStream(basemapFile).use { output ->
+                                                input.copyTo(output)
+                                            }
                                         }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("MapScreen", "Failed to copy asset world_basemap.mbtiles", e)
                                     }
-                                } catch (e: Exception) {
-                                    android.util.Log.e("MapScreen", "Failed to copy asset world_basemap.mbtiles", e)
+                                }
+
+                                // 2. Check for offline archives (e.g. .zip, .sqlite) in the basePath
+                                val archives = basePath.listFiles { file ->
+                                    file.name.endsWith(".sqlite") || file.name.endsWith(".zip") || file.name.endsWith(".mbtiles")
+                                }
+
+                                if (!archives.isNullOrEmpty()) {
+                                    // If offline files exist, use them via standard tile provider
+                                    setUseDataConnection(false)
+                                    val provider = org.osmdroid.tileprovider.MapTileProviderBasic(context)
+                                    provider.setOfflineFirst(true)
+                                    tileProvider = provider
+                                } else {
+                                    // Fallback to online map if no offline archive is bundled
+                                    setTileSource(TileSourceFactory.MAPNIK)
                                 }
                             }
+                        },
+                        update = { view ->
+                            view.overlays.clear() // H-14: Clear stale overlays before adding new ones
 
-                            // 2. Check for offline archives (e.g. .zip, .sqlite) in the basePath
-                            val archives = basePath.listFiles { file ->
-                                file.name.endsWith(".sqlite") || file.name.endsWith(".zip") || file.name.endsWith(".mbtiles")
+                            // Center the map between estimated and computed positions
+                            val centerLat = (estimatedGeoPoint.latitude + computedGeoPoint.latitude) / 2.0
+                            val centerLon = (estimatedGeoPoint.longitude + computedGeoPoint.longitude) / 2.0
+                            view.controller.setZoom(12.0)
+                            view.controller.setCenter(GeoPoint(centerLat, centerLon))
+
+                            // Dashed offset line between estimated and computed positions
+                            val offsetLine = Polyline()
+                            offsetLine.addPoint(estimatedGeoPoint)
+                            offsetLine.addPoint(computedGeoPoint)
+                            offsetLine.outlinePaint.apply {
+                                color = Color.DKGRAY
+                                strokeWidth = 4f
+                                pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 15f), 0f)
+                                style = android.graphics.Paint.Style.STROKE
                             }
+                            view.overlays.add(offsetLine)
 
-                            if (!archives.isNullOrEmpty()) {
-                                // If offline files exist, use them via standard tile provider
-                                setUseDataConnection(false)
-                                val provider = org.osmdroid.tileprovider.MapTileProviderBasic(context)
-                                provider.setOfflineFirst(true)
-                                tileProvider = provider
-                                // Defaulting map source explicitly can sometimes break offline viewers, so we let provider handle it.
-                            } else {
-                                // Fallback to online map if no offline archive is bundled
-                                setTileSource(TileSourceFactory.MAPNIK)
+                            // Markers
+                            addEstimatedMarker(view, context, estimatedGeoPoint)
+                            addComputedMarker(view, context, computedGeoPoint)
+
+                            // Draw the LOPs
+                            capturedImages.forEachIndexed { index, imageData ->
+                                val azimuth = imageData.lopData?.azimuthDeg?.toFloat() ?: return@forEachIndexed
+                                val intercept = imageData.lopData.interceptNm?.toFloat() ?: return@forEachIndexed
+                                val color = when(index) {
+                                    0 -> Color.RED
+                                    1 -> Color.GREEN
+                                    else -> Color.BLUE
+                                }
+                                addLopLine(view, estimatedGeoPoint, azimuth, intercept, color)
                             }
+                            view.invalidate()
                         }
-                    },
-                    update = { view ->
-                        view.overlays.clear() // H-14: Clear stale overlays before adding new ones
-
-                        // Center the map between estimated and computed positions
-                        val centerLat = (estimatedGeoPoint.latitude + computedGeoPoint.latitude) / 2.0
-                        val centerLon = (estimatedGeoPoint.longitude + computedGeoPoint.longitude) / 2.0
-                        view.controller.setZoom(12.0)
-                        view.controller.setCenter(GeoPoint(centerLat, centerLon))
-
-                        // Dashed offset line between estimated and computed positions
-                        val offsetLine = Polyline()
-                        offsetLine.addPoint(estimatedGeoPoint)
-                        offsetLine.addPoint(computedGeoPoint)
-                        offsetLine.outlinePaint.apply {
-                            color = Color.DKGRAY
-                            strokeWidth = 4f
-                            pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 15f), 0f)
-                            style = android.graphics.Paint.Style.STROKE
-                        }
-                        view.overlays.add(offsetLine)
-
-                        // Markers
-                        addEstimatedMarker(view, context, estimatedGeoPoint)
-                        addComputedMarker(view, context, computedGeoPoint)
-
-                        // Draw the LOPs
-                        capturedImages.forEachIndexed { index, imageData ->
-                            val azimuth = imageData.lopData?.azimuthDeg?.toFloat() ?: return@forEachIndexed
-                            val intercept = imageData.lopData.interceptNm?.toFloat() ?: return@forEachIndexed
-                            val color = when(index) {
-                                0 -> Color.RED
-                                1 -> Color.GREEN
-                                else -> Color.BLUE
-                            }
-                            addLopLine(view, estimatedGeoPoint, azimuth, intercept, color)
-                        }
-                        view.invalidate()
-                    }
-                )
-
-                // Zoom Out to World Button
-                IconButton(
-                    onClick = {
-                        mapView.controller.zoomTo(2.0)
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), shape = RoundedCornerShape(8.dp))
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Public,
-                        contentDescription = S.zoomOutToWorld,
-                        tint = MaterialTheme.colorScheme.onSurface
                     )
-                }
+
+                    // Zoom Out to World Button
+                    IconButton(
+                        onClick = {
+                            mapView.controller.zoomTo(2.0)
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), shape = RoundedCornerShape(8.dp))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Public,
+                            contentDescription = S.zoomOutToWorld,
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
 
