@@ -153,7 +153,7 @@ This project builds on the work of incredible open-source projects:
 
 ## 📄 License
 
-Licensed under the **Apache License 2.0**. See [LICENSE.md](LICENSE.md) for details.
+Licensed under the **PolyForm Noncommercial License 1.0.0**. See [LICENSE.md](LICENSE.md) for details.
 
 The included astrometry libraries ([tetra3](https://github.com/esa/tetra3), [cedar-detect](https://github.com/smroid/cedar-detect)) retain their respective Apache 2.0 terms.
 
