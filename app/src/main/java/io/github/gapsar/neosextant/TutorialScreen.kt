@@ -129,7 +129,7 @@ fun TutorialScreen(
         when (currentStep) {
             0 -> StarWarsCrawlStep(
                 onFinished = { currentStep = 1 },
-                onSkip = { onTutorialComplete(false) }
+                onSkip = { currentStep = 1 }  // Skip intro only, show transition screen
             )
             1 -> TransitionStep(
                 onNext = { onTutorialComplete(true) },
