@@ -240,6 +240,7 @@ object S {
     val navigationFailed: String @Composable get() = s("Navigation Failed", "Navigation échouée", "Navegación fallida")
     val takePicture: String @Composable get() = s("Take picture", "Prendre une photo", "Tomar una foto")
     val goToMap: String @Composable get() = s("Go to Map", "Aller à la carte", "Ir al mapa")
+    val zoomOutToWorld: String @Composable get() = s("Zoom out to World", "Dézoomer sur le Monde", "Alejar al mundo")
 
     // ─── Map Screen ─────────────────────────────────────────────────────────────
     val mapResult: String @Composable get() = s("Position Fix", "Position fixée", "Posición fijada")

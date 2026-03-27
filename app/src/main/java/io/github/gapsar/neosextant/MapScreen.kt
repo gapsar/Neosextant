@@ -11,8 +11,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
 import io.github.gapsar.neosextant.model.*
+import io.github.gapsar.neosextant.ui.components.ImageSlotView
+import androidx.compose.foundation.layout.aspectRatio
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -54,7 +61,8 @@ fun MapScreen(
     estimatedLongitude: String,
     capturedImages: List<ImageData>,
     computedLatitude: Double,
-    computedLongitude: Double
+    computedLongitude: Double,
+    onImageClick: (ImageData) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -99,11 +107,12 @@ fun MapScreen(
         ) {
             // Map View
             Card(elevation = CardDefaults.cardElevation(4.dp)) {
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(400.dp),
-                    factory = {
+                Box {
+                    AndroidView(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(400.dp),
+                        factory = {
                         mapView.apply {
                             setMultiTouchControls(true)
 
@@ -112,6 +121,20 @@ fun MapScreen(
                             basePath.mkdirs()
                             org.osmdroid.config.Configuration.getInstance().osmdroidBasePath = basePath
                             org.osmdroid.config.Configuration.getInstance().osmdroidTileCache = basePath
+
+                            // Copy basemap if needed
+                            val basemapFile = java.io.File(basePath, "world_basemap.mbtiles")
+                            if (!basemapFile.exists()) {
+                                try {
+                                    context.assets.open("world_basemap.mbtiles").use { input ->
+                                        java.io.FileOutputStream(basemapFile).use { output ->
+                                            input.copyTo(output)
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MapScreen", "Failed to copy asset world_basemap.mbtiles", e)
+                                }
+                            }
 
                             // 2. Check for offline archives (e.g. .zip, .sqlite) in the basePath
                             val archives = basePath.listFiles { file ->
@@ -170,6 +193,24 @@ fun MapScreen(
                         view.invalidate()
                     }
                 )
+
+                // Zoom Out to World Button
+                IconButton(
+                    onClick = {
+                        mapView.controller.zoomTo(2.0)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), shape = RoundedCornerShape(8.dp))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Public,
+                        contentDescription = S.zoomOutToWorld,
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -195,6 +236,28 @@ fun MapScreen(
                         ) {
                             Text(S.viewDetailedCalc)
                         }
+                    }
+                }
+            }
+
+            if (capturedImages.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    for (i in 0 until 3) {
+                        val imageInfo = capturedImages.getOrNull(i)
+                        ImageSlotView(
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(1f),
+                            imageInfo = imageInfo,
+                            isSelected = false,
+                            isProcessing = false,
+                            onClick = { info -> onImageClick(info) },
+                            onLongClick = { info -> onImageClick(info) }
+                        )
                     }
                 }
             }
