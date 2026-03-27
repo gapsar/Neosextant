@@ -103,6 +103,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         if (!chaquopyTmpDir.exists()) {
             chaquopyTmpDir.mkdirs()
         }
+        // Set TMPDIR so Python's tempfile module finds this directory
+        try {
+            android.system.Os.setenv("TMPDIR", chaquopyTmpDir.absolutePath, true)
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to set TMPDIR env var", e)
+        }
         
         if (!com.chaquo.python.Python.isStarted()) {
             com.chaquo.python.Python.start(com.chaquo.python.android.AndroidPlatform(this))
