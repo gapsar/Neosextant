@@ -625,14 +625,8 @@ fun CameraView(
                                                 for (i in 0 until centroidsArray.length()) {
                                                     val pt = centroidsArray.optJSONArray(i)
                                                     if (pt != null && pt.length() >= 2) {
-                                                        val rawCy = pt.optDouble(0)
-                                                        val rawCx = pt.optDouble(1)
-                                                        if (needsRotation) {
-                                                            // Rotate 90 degrees clockwise
-                                                            parsedCentroids.add(Pair(rawCx, imageHeight - rawCy))
-                                                        } else {
-                                                            parsedCentroids.add(Pair(rawCy, rawCx))
-                                                        }
+                                                        // Store as raw (y, x) from Python — transform at display time only
+                                                        parsedCentroids.add(Pair(pt.optDouble(0), pt.optDouble(1)))
                                                     }
                                                 }
                                             }

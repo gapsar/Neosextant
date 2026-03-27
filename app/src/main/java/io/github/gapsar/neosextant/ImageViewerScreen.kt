@@ -158,13 +158,40 @@ fun ImageViewerScreen(
                             offsetX = (size.width - renderWidth) / 2f
                         }
 
-                        val scaleX = renderWidth / intrinsicSize.width
-                        val scaleY = renderHeight / intrinsicSize.height
+                        // Centroids are stored as raw (y, x) from Python — in the original
+                        // sensor coordinate system (before EXIF rotation).
+                        //
+                        // Coil auto-applies EXIF rotation when displaying, so:
+                        // - intrinsicSize reflects the RAW sensor dimensions (before rotation)
+                        // - The rendered image on screen is the rotated version
+                        //
+                        // If the original sensor image is landscape (w > h), Coil rotates it
+                        // 90° CW to display as portrait. We need to apply the same rotation
+                        // to centroids.
+                        // If the image is already portrait (e.g. compressed history images
+                        // that were pre-rotated), we do a direct mapping.
 
-                        for ((cy, cx) in imageData.tetra3Result.centroids) {
-                            // cx, cy are in intrinsic image coordinates
-                            val screenX = offsetX + (cx.toFloat() * scaleX)
-                            val screenY = offsetY + (cy.toFloat() * scaleY)
+                        val sensorIsLandscape = intrinsicSize.width > intrinsicSize.height
+
+                        for ((rawY, rawX) in imageData.tetra3Result.centroids) {
+                            val screenX: Float
+                            val screenY: Float
+
+                            if (sensorIsLandscape) {
+                                // Sensor image is landscape, displayed as portrait after 90° CW rotation.
+                                // After 90° CW rotation: displayX = rawY, displayY = sensorWidth - rawX
+                                // Rendered dims: width maps to sensorHeight, height maps to sensorWidth
+                                val scaleX = renderWidth / intrinsicSize.height.toFloat()
+                                val scaleY = renderHeight / intrinsicSize.width.toFloat()
+                                screenX = offsetX + rawY.toFloat() * scaleX
+                                screenY = offsetY + (intrinsicSize.width - rawX).toFloat() * scaleY
+                            } else {
+                                // Image is already portrait — direct mapping
+                                val scaleX = renderWidth / intrinsicSize.width.toFloat()
+                                val scaleY = renderHeight / intrinsicSize.height.toFloat()
+                                screenX = offsetX + rawX.toFloat() * scaleX
+                                screenY = offsetY + rawY.toFloat() * scaleY
+                            }
 
                             drawCircle(
                                 color = Color.Red,
