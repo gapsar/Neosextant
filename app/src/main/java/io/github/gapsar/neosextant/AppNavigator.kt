@@ -145,13 +145,15 @@ fun AppNavigator(
             composable("tutorial") {
                 android.util.Log.e("Tutorial", "Composing tutorial route")
                 TutorialScreen(
-                    onTutorialComplete = {
+                    onTutorialComplete = { startInteractive ->
                         markTutorialCompleted()
                         navController.navigate("camera") {
                             popUpTo("tutorial") { inclusive = true }
                         }
-                        showOverlay = true
-                        tutorialStep = 1
+                        if (startInteractive) {
+                            showOverlay = true
+                            tutorialStep = 1
+                        }
                     }
                 )
             }
@@ -275,7 +277,11 @@ fun AppNavigator(
                     estimatedLongitude = entry.estimatedLongitude.toString(),
                     capturedImages = images,
                     computedLatitude = entry.latitude,
-                    computedLongitude = entry.longitude
+                    computedLongitude = entry.longitude,
+                    onImageClick = { image ->
+                        viewerImageInfo = image
+                        navController.navigate("imageViewer")
+                    }
                 )
             }
         }
@@ -299,7 +305,11 @@ fun AppNavigator(
                 estimatedLongitude = longitude,
                 capturedImages = displayImages,
                 computedLatitude = displayLat,
-                computedLongitude = displayLon
+                computedLongitude = displayLon,
+                onImageClick = { image ->
+                    viewerImageInfo = image
+                    navController.navigate("imageViewer")
+                }
             )
         }
     }

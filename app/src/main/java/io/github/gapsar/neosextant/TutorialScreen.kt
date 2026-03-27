@@ -120,15 +120,21 @@ private fun StarryBackground(modifier: Modifier = Modifier) {
 
 @Composable
 fun TutorialScreen(
-    onTutorialComplete: () -> Unit
+    onTutorialComplete: (Boolean) -> Unit
 ) {
     var currentStep by remember { mutableIntStateOf(0) }
     android.util.Log.d("Tutorial", "TutorialScreen composing, currentStep=$currentStep")
 
     Box(modifier = Modifier.fillMaxSize()) {
         when (currentStep) {
-            0 -> StarWarsCrawlStep(onFinished = { currentStep = 1 })
-            1 -> TransitionStep(onNext = onTutorialComplete, onSkip = onTutorialComplete)
+            0 -> StarWarsCrawlStep(
+                onFinished = { currentStep = 1 },
+                onSkip = { onTutorialComplete(false) }
+            )
+            1 -> TransitionStep(
+                onNext = { onTutorialComplete(true) },
+                onSkip = { onTutorialComplete(false) }
+            )
         }
     }
 }
@@ -136,7 +142,7 @@ fun TutorialScreen(
 // ─── Step 0: Star Wars Crawl ───
 
 @Composable
-private fun StarWarsCrawlStep(onFinished: () -> Unit) {
+private fun StarWarsCrawlStep(onFinished: () -> Unit, onSkip: () -> Unit) {
     // structured text blocks for better alignment control
     data class CrawlLine(val text: String, val isTitle: Boolean)
 
@@ -242,7 +248,7 @@ private fun StarWarsCrawlStep(onFinished: () -> Unit) {
         )
 
         // Skip button area
-        Box(modifier = Modifier.fillMaxSize().clickable { onFinished() })
+        Box(modifier = Modifier.fillMaxSize().clickable { onSkip() })
 
         Text(
             text = S.tapToSkip,
