@@ -53,6 +53,19 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Ensures the Chaquopy temp directory exists before Python calls.
+ * Android can clean the cache directory at any time, so we must
+ * re-create it before every Python invocation.
+ */
+fun ensureChaquopyTmpDir(context: Context) {
+    val tmpDir = File(context.cacheDir, "chaquopy/tmp")
+    if (!tmpDir.exists()) {
+        tmpDir.mkdirs()
+        Log.d("CameraView", "Re-created chaquopy/tmp directory")
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalCamera2Interop::class)
 @Composable
 fun CameraView(
@@ -146,6 +159,7 @@ fun CameraView(
             try {
                 // Run heavy Python computation off the main thread
                 val result = withContext(Dispatchers.IO) {
+                    ensureChaquopyTmpDir(context)
                     val py = Python.getInstance()
                     val pythonScript = py.getModule("celestial_navigator")
 
@@ -607,6 +621,7 @@ fun CameraView(
 
                                     val job = launch(Dispatchers.IO) { // <--- Run on a background thread
                                         try {
+                                            ensureChaquopyTmpDir(context)
                                             val py = Python.getInstance()
                                             val pythonScript = py.getModule("celestial_navigator")
 
@@ -639,8 +654,14 @@ fun CameraView(
                                                 for (i in 0 until centroidsArray.length()) {
                                                     val pt = centroidsArray.optJSONArray(i)
                                                     if (pt != null && pt.length() >= 2) {
-                                                        // Store as raw (y, x) from Python — transform at display time only
-                                                        parsedCentroids.add(Pair(pt.optDouble(0), pt.optDouble(1)))
+                                                        val rawCy = pt.optDouble(0)
+                                                        val rawCx = pt.optDouble(1)
+                                                        if (needsRotation) {
+                                                            // Rotate 90° CW to match Coil's EXIF-rotated display
+                                                            parsedCentroids.add(Pair(rawCx, imageHeight - rawCy))
+                                                        } else {
+                                                            parsedCentroids.add(Pair(rawCy, rawCx))
+                                                        }
                                                     }
                                                 }
                                             }
