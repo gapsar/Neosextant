@@ -235,6 +235,7 @@ def image_processor(image_name, image_path):
         solution = T3_INSTANCE.solve_from_centroids(
             trimmed_centroids,
             (orig_height, orig_width),
+            fov_estimate=53,
             solve_timeout=10000  # 10-second timeout
         )
 
