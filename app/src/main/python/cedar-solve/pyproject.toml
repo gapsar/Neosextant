@@ -54,7 +54,7 @@ tetra3-gen-db = "tetra3.cli.generate_database:main"
 include-package-data = true
 
 [tool.setuptools.package-data]
-"tetra3.data" = ["default_database.npz"]
+"tetra3.data" = ["*.npz"]
 
 [tool.setuptools.packages.find]
 where = ["."]

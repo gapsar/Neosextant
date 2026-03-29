@@ -77,7 +77,7 @@ try:
     print("Python: Initializing Tetra3 Astrometry Solver...")
     # 'load_database' should point to the location of your Tetra3 database file.
     # 'default_database' assumes it's in the default location.
-    T3_INSTANCE = tetra3.Tetra3(load_database='default_database')
+    T3_INSTANCE = tetra3.Tetra3(load_database='smartphone_database_2.npz')
     if T3_INSTANCE.has_database:
         print("Python: Tetra3 Solver initialized successfully.")
     else:
@@ -114,7 +114,7 @@ def detect_centroids_cli(image_path):
         )
 
         result = subprocess.check_output(
-            [binary_path, "--input", image_path, "--output", output_path, "--sigma", "5.0"],
+            [binary_path, "--input", image_path, "--output", output_path, "--sigma", "6.0", "--hot-pixels", "true"],
             stderr=subprocess.STDOUT,
             timeout=30
         )
