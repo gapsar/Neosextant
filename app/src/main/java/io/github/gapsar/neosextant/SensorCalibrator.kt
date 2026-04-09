@@ -54,6 +54,10 @@ class SensorCalibrator(context: Context) {
 
     fun getParams() = params
 
+    fun resetCalibration() {
+        saveParams(CalibrationParams())
+    }
+
     // --- Persistence ---
 
     private fun loadParams(): CalibrationParams {

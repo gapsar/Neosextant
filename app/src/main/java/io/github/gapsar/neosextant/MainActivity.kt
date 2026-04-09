@@ -32,7 +32,8 @@ import java.util.concurrent.TimeUnit
 class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var rotationVectorSensor: Sensor? = null
-    private var accelerometer: Sensor? = null
+    private var gravitySensor: Sensor? = null
+    private var accelerometer: Sensor? = null // Fallback if TYPE_GRAVITY unavailable
 
     // Automation: Sensor Pipeline
     lateinit var sensorCalibrator: SensorCalibrator
@@ -172,11 +173,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private fun setupSensors() {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        // Preferred: Accelerometer for Sphere Fitting
+        // Preferred: Fused Gravity sensor for much lower noise (gyro-stabilized)
+        gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        // Fallback: Raw accelerometer if TYPE_GRAVITY is unavailable
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
-        if (accelerometer == null) {
-            Log.e("SensorSetup", "Sensor.TYPE_ACCELEROMETER not available!")
+        if (gravitySensor != null) {
+            Log.d("SensorSetup", "Using fused TYPE_GRAVITY sensor for reduced noise")
+        } else if (accelerometer != null) {
+            Log.w("SensorSetup", "TYPE_GRAVITY not available, falling back to raw TYPE_ACCELEROMETER")
+        } else {
+            Log.e("SensorSetup", "No gravity or accelerometer sensor available!")
         }
     }
 
@@ -223,7 +230,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
-        accelerometer?.also {
+        TimeSynchronizer.sync(this)
+        // Prefer fused gravity sensor; fall back to raw accelerometer
+        val sensor = gravitySensor ?: accelerometer
+        sensor?.also {
              sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
     }
@@ -235,8 +245,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent?) {
         event?.let {
-               if (it.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-                // Step A: Raw Accel
+               if (it.sensor.type == Sensor.TYPE_GRAVITY || it.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+                // Step A: Gravity vector (from fused TYPE_GRAVITY or fallback TYPE_ACCELEROMETER)
                 val raw = SensorCalibrator.Vec3(it.values[0], it.values[1], it.values[2])
                 currentRawAccel.value = raw
 
