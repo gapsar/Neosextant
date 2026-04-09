@@ -23,12 +23,18 @@ import java.util.Date
 object TimeSynchronizer {
     private const val PREFS_NAME = "NeosextantTime"
     private const val KEY_OFFSET = "time_offset_millis"
+    private const val KEY_SYNC_TIME_WALL = "sync_time_wall"
+    private const val KEY_SYNC_TIME_ELAPSED = "sync_time_elapsed"
     private var timeOffsetMillis: Long = 0L
+    private var lastSyncWallTime: Long = 0L
+    private var lastSyncElapsedRealtime: Long = 0L
 
     fun sync(context: Context) {
         // Load the persistently stored offset first so we have *something* immediately
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         timeOffsetMillis = prefs.getLong(KEY_OFFSET, 0L)
+        lastSyncWallTime = prefs.getLong(KEY_SYNC_TIME_WALL, 0L)
+        lastSyncElapsedRealtime = prefs.getLong(KEY_SYNC_TIME_ELAPSED, 0L)
         Log.d("TimeSynchronizer", "Initialized with stored offset: ${timeOffsetMillis}ms")
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -36,7 +42,13 @@ object TimeSynchronizer {
             val ntpOffset = trySyncNTP()
             if (ntpOffset != null) {
                 timeOffsetMillis = ntpOffset
-                prefs.edit().putLong(KEY_OFFSET, timeOffsetMillis).apply()
+                lastSyncWallTime = System.currentTimeMillis()
+                lastSyncElapsedRealtime = SystemClock.elapsedRealtime()
+                prefs.edit()
+                    .putLong(KEY_OFFSET, timeOffsetMillis)
+                    .putLong(KEY_SYNC_TIME_WALL, lastSyncWallTime)
+                    .putLong(KEY_SYNC_TIME_ELAPSED, lastSyncElapsedRealtime)
+                    .apply()
                 Log.d("TimeSynchronizer", "Successfully synced true time via NTP. Offset updated to: ${timeOffsetMillis}ms")
                 return@launch
             }
@@ -45,7 +57,13 @@ object TimeSynchronizer {
             val gpsOffset = trySyncGPS(context)
             if (gpsOffset != null) {
                 timeOffsetMillis = gpsOffset
-                prefs.edit().putLong(KEY_OFFSET, timeOffsetMillis).apply()
+                lastSyncWallTime = System.currentTimeMillis()
+                lastSyncElapsedRealtime = SystemClock.elapsedRealtime()
+                prefs.edit()
+                    .putLong(KEY_OFFSET, timeOffsetMillis)
+                    .putLong(KEY_SYNC_TIME_WALL, lastSyncWallTime)
+                    .putLong(KEY_SYNC_TIME_ELAPSED, lastSyncElapsedRealtime)
+                    .apply()
                 Log.d("TimeSynchronizer", "Successfully synced true time via GPS. Offset updated to: ${timeOffsetMillis}ms")
                 return@launch
             }
@@ -139,5 +157,22 @@ object TimeSynchronizer {
      */
     fun getTrueTime(): Date {
         return Date(System.currentTimeMillis() + timeOffsetMillis)
+    }
+
+    /**
+     * Returns a Pair indicating the age of the sync in milliseconds, and a boolean true if it's reliable (elapsedRealtime),
+     * or false if the device rebooted (fallback to currentTimeMillis). Returns null if never synced.
+     */
+    fun getSyncAgeMillis(): Pair<Long, Boolean>? {
+        if (lastSyncWallTime == 0L) return null
+        
+        val currentElapsed = SystemClock.elapsedRealtime()
+        if (currentElapsed >= lastSyncElapsedRealtime && lastSyncElapsedRealtime > 0L) {
+            // No reboot detected
+            return Pair(currentElapsed - lastSyncElapsedRealtime, true)
+        } else {
+            // Device rebooted or elapsed realtime wrapped around
+            return Pair(System.currentTimeMillis() - lastSyncWallTime, false)
+        }
     }
 }

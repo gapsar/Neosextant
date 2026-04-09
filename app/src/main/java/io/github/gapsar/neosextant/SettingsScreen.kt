@@ -6,6 +6,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -44,10 +45,15 @@ fun SettingsScreen(
     onReplayTutorial: () -> Unit,
     onLocaleChange: (AppLocale) -> Unit,
     isRedTintMode: Boolean,
-    onRedTintModeChange: (Boolean) -> Unit
+    onRedTintModeChange: (Boolean) -> Unit,
+    onResetSensorCal: () -> Unit,
+    onResetHorizon: () -> Unit
 ) {
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showSystemParamsDialog by remember { mutableStateOf(false) }
+    var showSolverModeHelpDialog by remember { mutableStateOf(false) }
+    var showResetSensorDialog by remember { mutableStateOf(false) }
+    var showResetHorizonDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -74,9 +80,19 @@ fun SettingsScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            TimeSyncStatus()
+
             Text(S.sensorCalibration, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Button(onClick = onNavigateToCalibration, modifier = Modifier.fillMaxWidth()) {
                 Text(S.calibrateSensors)
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showResetSensorDialog = true }, modifier = Modifier.weight(1f)) {
+                    Text(S.resetSensorCal)
+                }
+                OutlinedButton(onClick = { showResetHorizonDialog = true }, modifier = Modifier.weight(1f)) {
+                    Text(S.resetHorizon)
+                }
             }
 
             Button(onClick = onNavigateToHistory, modifier = Modifier.fillMaxWidth()) {
@@ -159,7 +175,12 @@ fun SettingsScreen(
 
             // Solver Mode Toggle
             Column(modifier = Modifier.tutorialTarget(2)) {
-                Text(S.solverMode, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(S.solverMode, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    IconButton(onClick = { showSolverModeHelpDialog = true }) {
+                        Icon(Icons.Default.Info, contentDescription = S.helpSolverModeTitle, modifier = Modifier.size(20.dp))
+                    }
+                }
                 Text(
                     if (solverMode == SolverMode.ITERATIVE) S.iterativeDesc else S.lopDesc,
                     style = MaterialTheme.typography.bodySmall,
@@ -180,10 +201,11 @@ fun SettingsScreen(
                 }
             }
 
-            // Estimated position fields (now required for both modes)
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(S.estimatedPosition, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            // Estimated position fields (only for LOP mode)
+            if (solverMode == SolverMode.LOP) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(S.estimatedPosition, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 ValidatedNumberField(
                     value = initialLatitude,
                     onValueChange = onLatitudeChange,
@@ -207,6 +229,7 @@ fun SettingsScreen(
             }
         }
     }
+}
 
     // Language picker dialog
     if (showLanguageDialog) {
@@ -296,6 +319,63 @@ fun SettingsScreen(
             }
         )
     }
+
+    if (showResetSensorDialog) {
+        val dialogModifier = if (isRedTintMode) {
+            Modifier.graphicsLayer { colorFilter = ColorFilter.colorMatrix(RedTintMatrix) }
+        } else Modifier
+        AlertDialog(
+            modifier = dialogModifier,
+            onDismissRequest = { showResetSensorDialog = false },
+            title = { Text(S.resetConfirmTitle) },
+            text = { Text(S.resetConfirmText) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onResetSensorCal()
+                    showResetSensorDialog = false
+                }) { Text(S.confirm) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetSensorDialog = false }) { Text(S.cancel) }
+            }
+        )
+    }
+
+    if (showResetHorizonDialog) {
+        val dialogModifier = if (isRedTintMode) {
+            Modifier.graphicsLayer { colorFilter = ColorFilter.colorMatrix(RedTintMatrix) }
+        } else Modifier
+        AlertDialog(
+            modifier = dialogModifier,
+            onDismissRequest = { showResetHorizonDialog = false },
+            title = { Text(S.resetConfirmTitle) },
+            text = { Text(S.resetConfirmText) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onResetHorizon()
+                    showResetHorizonDialog = false
+                }) { Text(S.confirm) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetHorizonDialog = false }) { Text(S.cancel) }
+            }
+        )
+    }
+
+    if (showSolverModeHelpDialog) {
+        val dialogModifier = if (isRedTintMode) {
+            Modifier.graphicsLayer { colorFilter = ColorFilter.colorMatrix(RedTintMatrix) }
+        } else Modifier
+        AlertDialog(
+            modifier = dialogModifier,
+            onDismissRequest = { showSolverModeHelpDialog = false },
+            title = { Text(S.helpSolverModeTitle) },
+            text = { Text(S.helpSolverModeText) },
+            confirmButton = {
+                TextButton(onClick = { showSolverModeHelpDialog = false }) { Text(S.confirm) }
+            }
+        )
+    }
 }
 
 @Composable
@@ -355,4 +435,37 @@ fun ValidatedNumberField(
             }
         }
     }
+}
+
+@Composable
+fun TimeSyncStatus() {
+    val syncAgePair by produceState<Pair<Long, Boolean>?>(initialValue = TimeSynchronizer.getSyncAgeMillis()) {
+        while(true) {
+            value = TimeSynchronizer.getSyncAgeMillis()
+            kotlinx.coroutines.delay(60000)
+        }
+    }
+    
+    val text = if (syncAgePair == null) {
+        S.timeSyncNever
+    } else {
+        val ageMillis = syncAgePair!!.first
+        val isReliable = syncAgePair!!.second
+        val hours = java.util.concurrent.TimeUnit.MILLISECONDS.toHours(ageMillis)
+        val minutes = java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(ageMillis) % 60
+        S.timeSyncStatus(hours, minutes, isReliable)
+    }
+
+    val color = if (syncAgePair == null) {
+        MaterialTheme.colorScheme.error
+    } else {
+        val ageHrs = java.util.concurrent.TimeUnit.MILLISECONDS.toHours(syncAgePair!!.first)
+        when {
+            ageHrs < 24 -> MaterialTheme.colorScheme.onSurfaceVariant
+            ageHrs < 72 -> androidx.compose.ui.graphics.Color(0xFFFFA000) // Amber
+            else -> MaterialTheme.colorScheme.error
+        }
+    }
+    
+    Text(text, style = MaterialTheme.typography.bodySmall, color = color, fontWeight = FontWeight.SemiBold)
 }
