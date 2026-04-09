@@ -46,6 +46,8 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
     var navigatedToMap = mutableStateOf(false)
     var computedLatitude = mutableStateOf<Double?>(null)
     var computedLongitude = mutableStateOf<Double?>(null)
+    var computedPrecision = mutableStateOf<Double?>(null)
+    var lastSolvedCount = mutableIntStateOf(0)
     var viewerImageInfo = mutableStateOf<ImageData?>(null)
     var historicalEntry = mutableStateOf<PositionEntry?>(null)
 
