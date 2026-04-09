@@ -194,13 +194,38 @@ object S {
 
     // ─── Settings Screen ────────────────────────────────────────────────────────
     val settings: String @Composable get() = s("Settings", "Paramètres", "Ajustes")
+    val timeSyncNever: String @Composable get() = s("Time sync: Never", "Synchro heure : Jamais", "Sincro hora: Nunca")
+    @Composable fun timeSyncStatus(hours: Long, minutes: Long, reliable: Boolean): String {
+        val age = if (hours > 0) s("${hours}h ${minutes}m ago", "il y a ${hours}h ${minutes}m", "hace ${hours}h ${minutes}m")
+                 else s("${minutes}m ago", "il y a ${minutes}m", "hace ${minutes}m")
+        val rel = if (reliable) "" else s(" (rebooted)", " (redémarré)", " (reiniciado)")
+        return s("Time sync: ", "Synchro heure : ", "Sincro hora: ") + age + rel
+    }
     val sensorCalibration: String @Composable get() = s("Sensor Calibration", "Calibration des capteurs", "Calibración de los sensores")
     val calibrateSensors: String @Composable get() = s("Calibrate Sensors", "Calibrer les capteurs", "Calibrar los sensores")
     val viewPositionHistory: String @Composable get() = s("View Position History", "Historique des positions", "Historial de posiciones")
     val replayTutorial: String @Composable get() = s("Replay Tutorial", "Rejouer le didacticiel", "Repetir el tutorial")
     val changeLanguage: String @Composable get() = s("Change Language", "Changer de langue", "Cambiar de idioma")
     val systemParameters: String @Composable get() = s("System Parameters", "Paramètres système", "Parámetros del sistema")
+    val resetSensorCal: String @Composable get() = s("Reset Sensor Cal", "Réinitialiser capteurs", "Restablecer sensores")
+    val resetHorizon: String @Composable get() = s("Reset Horizon", "Réinitialiser horizon", "Restablecer horizonte")
+    val resetConfirmTitle: String @Composable get() = s("Reset to Defaults?", "Réinitialiser ?", "¿Restablecer?")
+    val resetConfirmText: String @Composable get() = s("Are you sure you want to clear this calibration data?", "Voulez-vous vraiment effacer ces données ?", "¿Seguro que quieres borrar estos datos?")
+    val confirm: String @Composable get() = s("Confirm", "Confirmer", "Confirmar")
+    val cancel: String @Composable get() = s("Cancel", "Annuler", "Cancelar")
     val redTintMode: String @Composable get() = s("Red Tint Mode (Night Vision)", "Mode Teinte Rouge (Vision Nocturne)", "Modo Tinte Rojo (Visión Nocturna)")
+
+    // ─── Help ─────────────────────────────────────────────────────────────
+    val helpTitle: String @Composable get() = s("Observation Guide", "Guide d'observation", "Guía de observación")
+    val guideAzimuthTitle: String @Composable get() = s("Spread them out", "Répartissez-les", "Distribúyelas")
+    val guideAzimuthText: String @Composable get() = s("For the best position fix, capture stars in different directions (e.g., North, South-East, West) to reduce geometric bias.", "Pour de meilleurs résultats, capturez des étoiles dans différentes directions (Nord, Sud-Est, Ouest) pour réduire le biais géométrique.", "Para mejores resultados, captura estrellas en distintas direcciones para reducir el sesgo.")
+    val guideHorizonTitle: String @Composable get() = s("Horizon Calibration", "Calibration de l'horizon", "Calibración del horizonte")
+    val guideHorizonText: String @Composable get() = s("Your camera lens and internal sensors might not align perfectly. Use the Calibration screen to set a baseline offset using the true sea horizon.", "L'objectif de votre caméra et les capteurs internes peuvent ne pas s'aligner parfaitement. Utilisez l'écran de calibration pour corriger l'horizon.", "El lente de tu cámara y los sensores internos pueden no estar alineados. Usa la pantalla de calibración para corregir el horizonte.")
+    val guideSteadyTitle: String @Composable get() = s("Keep it steady", "Restez stable", "Mantén la estabilidad")
+    val guideSteadyText: String @Composable get() = s("Motion blur is the enemy of star detection. Keep the phone as steady as possible during the exposure.", "Le flou de mouvement empêche la détection des étoiles. Gardez le téléphone aussi stable que possible.", "El desenfoque de movimiento impide la detección. Mantén el teléfono lo más estable posible.")
+    val helpSolverModeTitle: String @Composable get() = s("Solver Mode", "Mode de Résolution", "Modo de Resolución")
+    val helpSolverModeText: String @Composable get() = s("• LOP Mode: Traditional Lines of Position. Strict 3-star limit. Best for verifying the classical method.\n• Iterative Mode: Advanced statistical solver. Allows 3+ stars. Provides internal precision estimate.", "• Mode LOP : Droites de hauteur traditionnelles. Limite stricte de 3 étoiles.\n• Mode Itératif : Solveur statistique avancé, 3 étoiles et plus.", "• LOP: Líneas de posición clásicas.\n• Iterativo: Solucionador avanzado estadístico.")
+
     val vesselInfo: String @Composable get() = s("Vessel Information", "Informations du navire", "Información del barco")
     val shipSpeed: String @Composable get() = s("Ship's Speed (knots)", "Vitesse du navire (nœuds)", "Velocidad del barco (nudos)")
     val speedNegative: String @Composable get() = s("Speed cannot be negative", "La vitesse ne peut pas être négative", "La velocidad no puede ser negativa")

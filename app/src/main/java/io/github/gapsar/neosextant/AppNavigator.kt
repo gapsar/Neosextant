@@ -67,6 +67,8 @@ fun AppNavigator(
     var navigatedToMap by vm.navigatedToMap
     var computedLatitude by vm.computedLatitude
     var computedLongitude by vm.computedLongitude
+    var computedPrecision by vm.computedPrecision
+    var lastSolvedCount by vm.lastSolvedCount
     var viewerImageInfo by vm.viewerImageInfo
     var showOverlay by vm.showOverlay
     var tutorialStep by vm.tutorialStep
@@ -193,6 +195,7 @@ fun AppNavigator(
                         Log.w("AppNavigator", "Failed to delete image file", e)
                     }
                     capturedImages.remove(imageToRemove)
+                    vm.lastSolvedCount.intValue = 0
                 },
                 onRemoveAllImages = {
                     // Delete all active image files, but history copies are safe
@@ -208,6 +211,7 @@ fun AppNavigator(
                         }
                     }
                     capturedImages.clear()
+                    vm.lastSolvedCount.intValue = 0
                 },
                 onImageLongClick = { image ->
                     viewerImageInfo = image
@@ -219,6 +223,10 @@ fun AppNavigator(
                 onComputedLatitudeChange = { computedLatitude = it },
                 computedLongitude = computedLongitude,
                 onComputedLongitudeChange = { computedLongitude = it },
+                computedPrecision = computedPrecision,
+                onComputedPrecisionChange = { computedPrecision = it },
+                lastSolvedCount = lastSolvedCount,
+                onLastSolvedCountChange = { lastSolvedCount = it },
                 supportsManualExposure = supportsManualExposure,
                 startPitchAveraging = startPitchAveraging,
                 stopPitchAveraging = stopPitchAveraging,
@@ -258,7 +266,9 @@ fun AppNavigator(
                     currentLocale = locale
                 },
                 isRedTintMode = isRedTintMode,
-                onRedTintModeChange = { vm.saveRedTintMode(it) }
+                onRedTintModeChange = { vm.saveRedTintMode(it) },
+                onResetSensorCal = { sensorCalibrator.resetCalibration() },
+                onResetHorizon = { saveCalibrationOffset(0.0) }
             )
         }
         composable("calibration") {
@@ -270,6 +280,11 @@ fun AppNavigator(
                 sensorCalibrator = sensorCalibrator,
                 sensorPipeline = sensorPipeline,
                 rawAccelState = rawAccelState
+            )
+        }
+        composable("help") {
+            HelpScreen(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
         composable("history") {
