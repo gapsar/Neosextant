@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material3.*
@@ -91,6 +92,10 @@ fun CameraView(
     onComputedLatitudeChange: (Double?) -> Unit,
     computedLongitude: Double?,
     onComputedLongitudeChange: (Double?) -> Unit,
+    computedPrecision: Double?,
+    onComputedPrecisionChange: (Double?) -> Unit,
+    lastSolvedCount: Int,
+    onLastSolvedCountChange: (Int) -> Unit,
     supportsManualExposure: Boolean,
     startPitchAveraging: () -> Unit,
     stopPitchAveraging: () -> Double?,
@@ -138,6 +143,7 @@ fun CameraView(
     var extensionsManager by remember { mutableStateOf<ExtensionsManager?>(null) }
     var activeCameraSelector by remember { mutableStateOf(CameraSelector.DEFAULT_BACK_CAMERA) }
     var solverError by remember { mutableStateOf<String?>(null) }
+    var isSolving by remember { mutableStateOf(false) }
 
 
     // H-13: Use mode-aware readyCount for LaunchedEffect key to avoid race conditions
@@ -153,8 +159,11 @@ fun CameraView(
     // Navigate to map when 3 images are captured and fully processed for the current mode
     LaunchedEffect(capturedImages.size, readyCount) {
         val solvedImages = capturedImages.filter { it.tetra3Result.solved }
-        if (readyCount == 3 && !navigatedToMap) {
-            onNavigatedToMapChange(true)
+        val isReady = if (solverMode == SolverMode.ITERATIVE) readyCount >= 3 else readyCount == 3
+        
+        if (isReady && readyCount != lastSolvedCount) {
+            onLastSolvedCountChange(readyCount)
+            isSolving = true
 
             try {
                 // Run heavy Python computation off the main thread
@@ -183,8 +192,8 @@ fun CameraView(
                         val solveResultJsonStr = pythonScript.callAttr(
                             "solve_iterative",
                             obsList.toString(),
-                            latitude.toDoubleOrNull() ?: 0.0,
-                            longitude.toDoubleOrNull() ?: 0.0,
+                            0.0, // Hardcoded initial latitude for iterative solver
+                            0.0, // Hardcoded initial longitude for iterative solver
                             heightM,
                             pressureHpa,
                             temperatureC
@@ -232,7 +241,7 @@ fun CameraView(
                 if (!result.has("fixed_latitude") || !result.has("fixed_longitude")) {
                     solverError = "Missing coordinates in solver result"
                     Log.e("Solver", "Python error: $solverError")
-                    onNavigatedToMapChange(false)
+                    isSolving = false
                     return@LaunchedEffect
                 }
 
@@ -243,6 +252,9 @@ fun CameraView(
 
                 onComputedLatitudeChange(finalLatitude)
                 onComputedLongitudeChange(finalLongitude)
+                if (!shiftNm.isNaN()) {
+                    onComputedPrecisionChange(shiftNm)
+                }
                 
                 // M-17: Delayed Image Compression & Downscaling — copy to history dir
                 val historyDir = java.io.File(context.getExternalFilesDir(null), "history_images")
@@ -318,11 +330,16 @@ fun CameraView(
                         imagesJson = imagesJsonStr
                     )
                 )
-
-                navController.navigate("map")
+                
+                isSolving = false
+                
+                if (!navigatedToMap) {
+                    onNavigatedToMapChange(true)
+                    navController.navigate("map")
+                }
             } catch (e: Exception) {
                 Log.e("Solver", "Failed to compute position fix", e)
-                onNavigatedToMapChange(false) // Allow retry
+                isSolving = false
             }
         }
     }
@@ -430,19 +447,20 @@ fun CameraView(
                     .padding(horizontal = 16.dp)
                     .padding(bottom = 16.dp)
             ) {
-                Row(
+                val maxSlots = if (solverMode == SolverMode.ITERATIVE) Math.max(3, java.lang.Math.min(6, capturedImages.size + 1)) else 3
+                androidx.compose.foundation.lazy.LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    for (i in 0 until 3) {
+                    items(maxSlots) { i ->
                         val imageInfo = capturedImages.getOrNull(i)
                         val isProcessing = imageInfo?.tetra3Result?.analysisState == AnalysisState.PENDING
 
                         ImageSlotView(
                             modifier = Modifier
-                                .weight(1f)
+                                .fillParentMaxWidth(0.31f)
                                 .aspectRatio(1f),
                             imageInfo = imageInfo,
                             isSelected = imageInfo != null && imageInfo.id == selectedImageInfo?.id,
@@ -523,7 +541,7 @@ fun CameraView(
             AndroidView({ previewView }, modifier = Modifier.fillMaxSize())
 
             // "Shot in progress" overlay
-            if (isTakingPicture) {
+            if (isTakingPicture || isSolving) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -534,7 +552,7 @@ fun CameraView(
                         CircularProgressIndicator(color = Color.White)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            S.capturingHoldStill,
+                            if (isTakingPicture) S.capturingHoldStill else "Computing position...",
                             color = Color.White,
                             style = MaterialTheme.typography.titleMedium
                         )
@@ -542,37 +560,50 @@ fun CameraView(
                 }
             }
 
-            // Settings Button (Top Left)
-            IconButton(
-                onClick = { navController.navigate("settings") },
+            // Settings & Help Buttons (Top Left)
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(top = 32.dp, start = 12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = S.settings,
-                    modifier = Modifier.size(40.dp)
-                )
+                IconButton(onClick = { navController.navigate("settings") }) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = S.settings,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                IconButton(onClick = { navController.navigate("help") }) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = S.helpTitle,
+                        modifier = Modifier.size(40.dp),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
 
             // Go to Map Button (Top Right)
             AnimatedVisibility(
-                visible = capturedImages.size == 3 && computedLatitude != null && computedLongitude != null,
+                visible = readyCount >= 3 && computedLatitude != null && computedLongitude != null,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 32.dp, end = 12.dp)
             ) {
-                IconButton(onClick = {
-                    if (computedLatitude != null && computedLongitude != null) {
-                        navController.navigate("map")
-                    }
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.Map,
-                        contentDescription = S.goToMap,
-                        modifier = Modifier.size(40.dp)
+                if (solverMode == SolverMode.ITERATIVE && computedPrecision != null) {
+                    ExtendedFloatingActionButton(
+                        onClick = { navController.navigate("map") },
+                        icon = { Icon(Icons.Default.Map, contentDescription = S.goToMap) },
+                        text = { Text("Map (±%.1f NM)".format(computedPrecision)) }
                     )
+                } else {
+                    IconButton(onClick = { navController.navigate("map") }) {
+                        Icon(
+                            imageVector = Icons.Default.Map,
+                            contentDescription = S.goToMap,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
                 }
             }
 
@@ -586,7 +617,7 @@ fun CameraView(
                 IconButton(
                     modifier = Modifier.size(80.dp).tutorialTarget(5),
                     onClick = {
-                    if (!isTakingPicture && capturedImages.size < 3) {
+                    if (!isTakingPicture && !isSolving && (solverMode == SolverMode.ITERATIVE || capturedImages.size < 3)) {
                         isTakingPicture = true
 
                         // Start averaging pitch readings
@@ -607,7 +638,7 @@ fun CameraView(
                                 val captureTime = TimeSynchronizer.getTrueTime() // Capture accurate synchronized time at shutter
                                 val imageName = File(path).name
                                 // C-03: Format timestamp as ISO 8601 UTC for Python backend
-                                val utcFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+                                val utcFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
                                 utcFormat.timeZone = TimeZone.getTimeZone("UTC")
                                 val timestamp = utcFormat.format(captureTime)
                                 val newImageInfo = ImageData(uri = uri, name = imageName, timestamp = timestamp, measuredHeight = measuredHeight)
