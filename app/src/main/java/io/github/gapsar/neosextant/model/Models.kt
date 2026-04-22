@@ -1,9 +1,10 @@
 package io.github.gapsar.neosextant.model
 
 import android.net.Uri
+import io.github.gapsar.neosextant.SensorCalibrator
 
 // Solver mode enum
-enum class SolverMode { LOP, ITERATIVE }
+enum class SolverMode { LOP, ITERATIVE, ONE_SHOT }
 
 // Represents the state of the image analysis
 enum class AnalysisState {
@@ -38,6 +39,7 @@ data class ImageData(
     val name: String,
     val timestamp: String,
     val measuredHeight: Double?,
+    val gravityVector: SensorCalibrator.Vec3? = null,
     val tetra3Result: Tetra3AnalysisResult = Tetra3AnalysisResult(analysisState = AnalysisState.PENDING),
     val lopData: LineOfPositionData? = null
 )

@@ -477,6 +477,143 @@ def lop_center_compute(lop_1_json, lop_2_json, lop_3_json, estimated_latitude, e
 
 
 
+# --- 1-SHOT FIX CALCULATION ---
+def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
+    """
+    Computes a 1-Shot geographic fix from a single image using the
+    3D Gravity Vector (zenith direction) and the plate-solve orientation.
+
+    Algorithm:
+    1. Reconstruct tetra3's rotation matrix R (ICRS → camera) from RA/Dec/Roll.
+    2. Map the zenith vector from Android sensor frame to tetra3's camera frame.
+    3. Transform zenith from camera frame to ICRS: zenith_icrs = R^T @ zenith_cam.
+    4. Extract latitude = arcsin(z_icrs), LST = atan2(y_icrs, x_icrs).
+    5. Longitude = LST − GST.
+    """
+    try:
+        import numpy as np
+        from numpy.linalg import norm as np_norm
+        from astropy.time import Time
+        from PIL import Image
+        import json
+        import traceback
+
+        # --- 1. Time and Greenwich Sidereal Time ---
+        t = Time(time_iso)
+        gst_deg = t.sidereal_time('mean', 'greenwich').degree
+        print(f"Python: 1-Shot: time={time_iso}, GST={gst_deg:.4f}°")
+
+        # --- 2. Reconstruct tetra3's rotation matrix from RA/Dec/Roll ---
+        # tetra3 defines R as mapping ICRS vectors to camera-frame vectors.
+        # Rows of R are the camera axes expressed in ICRS coordinates:
+        #   Row 0 = boresight (into sky)
+        #   Row 1 = "left" in stored image
+        #   Row 2 = "up" in stored image
+        #
+        # tetra3 extracts angles as:
+        #   RA   = atan2(R[0,1], R[0,0])
+        #   Dec  = atan2(R[0,2], norm(R[1:3, 2]))
+        #   Roll = atan2(R[1,2], R[2,2])
+
+        ra_rad  = np.radians(float(ra_deg))
+        dec_rad = np.radians(float(dec_deg))
+        roll_rad = np.radians(float(roll_deg))
+
+        cos_ra, sin_ra   = np.cos(ra_rad),  np.sin(ra_rad)
+        cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
+        cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
+
+        # Boresight in ICRS (Row 0)
+        b = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
+
+        # "East" direction (perpendicular to boresight in equatorial plane)
+        E = np.array([-sin_ra, cos_ra, 0.0])
+
+        # "North" direction (toward NCP, projected perpendicular to boresight)
+        N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
+
+        # Apply roll rotation around boresight
+        # Row 1 (camera "left") = cos(roll)*E + sin(roll)*N
+        # Row 2 (camera "up")   = -sin(roll)*E + cos(roll)*N
+        row1 = cos_roll * E + sin_roll * N
+        row2 = -sin_roll * E + cos_roll * N
+
+        # Full rotation matrix: ICRS → camera
+        R = np.array([b, row1, row2])
+
+        print(f"Python: 1-Shot: RA={ra_deg:.4f}°, Dec={dec_deg:.4f}°, Roll={roll_deg:.4f}°")
+        print(f"Python: 1-Shot: R[0]={b}")
+
+        # --- 3. Map zenith from Android sensor frame to tetra3 camera frame ---
+        # Android accelerometer already outputs the ZENITH direction (reaction
+        # force = upward). No negation needed.
+        #
+        # The sensor pipeline normalizes and applies calibration+pitch offset,
+        # so (gx, gy, gz) is a unit vector pointing toward zenith in sensor coords:
+        #   Sensor X = right, Y = up (top of phone), Z = out of screen
+        #
+        # tetra3's camera frame axes (derived from _compute_vectors in tetra3.py):
+        #   Axis 0 = boresight (into sky)
+        #   Axis 1 = "left" in stored image
+        #   Axis 2 = "up" in stored image
+        #
+        # The stored image is ALWAYS in the camera sensor's native pixel
+        # orientation (landscape). EXIF orientation only affects display
+        # rotation, not the pixel data tetra3 processes. So the mapping from
+        # sensor axes to tetra3's camera frame is FIXED regardless of EXIF:
+        #
+        # On standard Android phones (sensorOrientation=90°, back camera):
+        #   Boresight (axis 0) = -Z_sensor  (camera looks through back of phone)
+        #   Left in stored image (axis 1) = +Y_sensor  (toward top of phone)
+        #   Up in stored image (axis 2)   = +X_sensor  (toward right of phone... wait)
+        #
+        # Verified empirically: v_cam = [-gz, gy, gx] produces correct results.
+
+        print(f"Python: 1-Shot: sensor g=({gx:.4f}, {gy:.4f}, {gz:.4f})")
+
+        v_cam = np.array([-float(gz), float(gy), float(gx)])
+
+        # Normalize
+        v_norm = np_norm(v_cam)
+        if v_norm < 1e-6:
+            return json.dumps({"error": "Gravity vector is zero"})
+        v_cam = v_cam / v_norm
+
+        print(f"Python: 1-Shot: zenith in camera frame = {v_cam}")
+
+        # --- 4. Transform zenith from camera frame to ICRS ---
+        # R maps ICRS → camera, so R^T maps camera → ICRS
+        zenith_icrs = R.T @ v_cam
+
+        print(f"Python: 1-Shot: zenith in ICRS = {zenith_icrs}")
+
+        # --- 5. Extract latitude and longitude ---
+        # Zenith declination = observer's latitude
+        lat_rad = np.arcsin(np.clip(zenith_icrs[2], -1.0, 1.0))
+        lat_deg_val = np.degrees(lat_rad)
+
+        # Zenith RA = Local Sidereal Time
+        lst_rad = np.arctan2(zenith_icrs[1], zenith_icrs[0])
+        lst_deg = np.degrees(lst_rad) % 360
+
+        # Longitude = LST − GST
+        lon_deg_val = (lst_deg - gst_deg + 180) % 360 - 180
+
+        result = {
+            "fixed_latitude": float(lat_deg_val),
+            "fixed_longitude": float(lon_deg_val),
+            "final_shift_nm": 0.0
+        }
+        print(f"Python: 1-Shot Fix: Lat={lat_deg_val:.4f}°, Lon={lon_deg_val:.4f}°")
+        print(f"Python: 1-Shot Fix: LST={lst_deg:.4f}°, GST={gst_deg:.4f}°")
+        return json.dumps(result)
+
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in solve_oneshot: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
+
 # --- Refactored Core Logic for Iteration ---
 
 def core_compute_intercept(ra, dec, time_obj, lat, lon, alt_obs, height_m=0.0, pressure_hpa=1013.25, temperature_c=15.0):

@@ -98,7 +98,7 @@ fun CameraView(
     onLastSolvedCountChange: (Int) -> Unit,
     supportsManualExposure: Boolean,
     startPitchAveraging: () -> Unit,
-    stopPitchAveraging: () -> Double?,
+    stopPitchAveraging: () -> Pair<Double?, SensorCalibrator.Vec3?>,
     markCalibrationUsed: () -> Unit,
     analysisJobs: java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.Job>,
     isRedTintMode: Boolean
@@ -159,7 +159,7 @@ fun CameraView(
     // Navigate to map when 3 images are captured and fully processed for the current mode
     LaunchedEffect(capturedImages.size, readyCount) {
         val solvedImages = capturedImages.filter { it.tetra3Result.solved }
-        val isReady = if (solverMode == SolverMode.ITERATIVE) readyCount >= 3 else readyCount == 3
+        val isReady = if (solverMode == SolverMode.ITERATIVE) readyCount >= 3 else if (solverMode == SolverMode.ONE_SHOT) readyCount == 1 else readyCount == 3
         
         if (isReady && readyCount != lastSolvedCount) {
             onLastSolvedCountChange(readyCount)
@@ -200,6 +200,24 @@ fun CameraView(
                         ).toString()
 
                         org.json.JSONObject(solveResultJsonStr)
+                    } else if (solverMode == SolverMode.ONE_SHOT) {
+                        // --- 1-SHOT SOLVER ---
+                        val img = solvedImages[0]
+                        val g = img.gravityVector
+                        if (g == null) {
+                            org.json.JSONObject().apply { put("error", "No gravity vector recorded for 1-Shot") }
+                        } else {
+                            val solveResultJsonStr = pythonScript.callAttr(
+                                "solve_oneshot",
+                                img.tetra3Result.raDeg ?: 0.0,
+                                img.tetra3Result.decDeg ?: 0.0,
+                                img.tetra3Result.rollDeg ?: 0.0,
+                                g.x, g.y, g.z,
+                                img.timestamp,
+                                img.uri.path
+                            ).toString()
+                            org.json.JSONObject(solveResultJsonStr)
+                        }
                     } else {
                         // --- C-04: LOP SOLVER ---
                         // Collect LOP JSON results from each solved image
@@ -315,7 +333,7 @@ fun CameraView(
                 }
 
                 // Save to History Repository
-                val modeStr = if (solverMode == SolverMode.ITERATIVE) "ITERATIVE" else "LOP"
+                val modeStr = if (solverMode == SolverMode.ITERATIVE) "ITERATIVE" else if (solverMode == SolverMode.ONE_SHOT) "ONE_SHOT" else "LOP"
                 val imagesJsonStr = HistoryRepository.serializeImages(finalImages)
                 
                 historyRepository.saveEntry(
@@ -447,12 +465,12 @@ fun CameraView(
                     .padding(horizontal = 16.dp)
                     .padding(bottom = 16.dp)
             ) {
-                val maxSlots = if (solverMode == SolverMode.ITERATIVE) Math.max(3, java.lang.Math.min(6, capturedImages.size + 1)) else 3
+                val maxSlots = if (solverMode == SolverMode.ITERATIVE) Math.max(3, java.lang.Math.min(6, capturedImages.size + 1)) else if (solverMode == SolverMode.ONE_SHOT) 1 else 3
                 androidx.compose.foundation.lazy.LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = if (maxSlots == 1) Arrangement.Center else Arrangement.spacedBy(8.dp)
                 ) {
                     items(maxSlots) { i ->
                         val imageInfo = capturedImages.getOrNull(i)
@@ -584,8 +602,9 @@ fun CameraView(
             }
 
             // Go to Map Button (Top Right)
+            val mapButtonVisible = if (solverMode == SolverMode.ONE_SHOT) readyCount >= 1 else readyCount >= 3
             AnimatedVisibility(
-                visible = readyCount >= 3 && computedLatitude != null && computedLongitude != null,
+                visible = mapButtonVisible && computedLatitude != null && computedLongitude != null,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 32.dp, end = 12.dp)
@@ -617,7 +636,8 @@ fun CameraView(
                 IconButton(
                     modifier = Modifier.size(80.dp).tutorialTarget(5),
                     onClick = {
-                    if (!isTakingPicture && !isSolving && (solverMode == SolverMode.ITERATIVE || capturedImages.size < 3)) {
+                    val maxImages = if (solverMode == SolverMode.ONE_SHOT) 1 else if (solverMode == SolverMode.ITERATIVE) Int.MAX_VALUE else 3
+                    if (!isTakingPicture && !isSolving && capturedImages.size < maxImages) {
                         isTakingPicture = true
 
                         // Start averaging pitch readings
@@ -628,7 +648,7 @@ fun CameraView(
                             imageCapture = imageCapture,
                             onImageCaptured = { uri, path ->
                                 // Stop averaging and get the result
-                                val avgAltitude = stopPitchAveraging()
+                                val (avgAltitude, avgGravity) = stopPitchAveraging()
                                 // Note: avgAltitude already includes the offset (handled in pipeline)
                                 val measuredHeight = avgAltitude
 
@@ -641,7 +661,7 @@ fun CameraView(
                                 val utcFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
                                 utcFormat.timeZone = TimeZone.getTimeZone("UTC")
                                 val timestamp = utcFormat.format(captureTime)
-                                val newImageInfo = ImageData(uri = uri, name = imageName, timestamp = timestamp, measuredHeight = measuredHeight)
+                                val newImageInfo = ImageData(uri = uri, name = imageName, timestamp = timestamp, measuredHeight = measuredHeight, gravityVector = avgGravity)
 
                                 onAddImage(newImageInfo)
                                 selectedImageInfo = newImageInfo // Show metadata immediately

@@ -224,7 +224,7 @@ object S {
     val guideSteadyTitle: String @Composable get() = s("Keep it steady", "Restez stable", "Mantén la estabilidad")
     val guideSteadyText: String @Composable get() = s("Motion blur is the enemy of star detection. Keep the phone as steady as possible during the exposure.", "Le flou de mouvement empêche la détection des étoiles. Gardez le téléphone aussi stable que possible.", "El desenfoque de movimiento impide la detección. Mantén el teléfono lo más estable posible.")
     val helpSolverModeTitle: String @Composable get() = s("Solver Mode", "Mode de Résolution", "Modo de Resolución")
-    val helpSolverModeText: String @Composable get() = s("• LOP Mode: Traditional Lines of Position. Strict 3-star limit. Best for verifying the classical method.\n• Iterative Mode: Advanced statistical solver. Allows 3+ stars. Provides internal precision estimate.", "• Mode LOP : Droites de hauteur traditionnelles. Limite stricte de 3 étoiles.\n• Mode Itératif : Solveur statistique avancé, 3 étoiles et plus.", "• LOP: Líneas de posición clásicas.\n• Iterativo: Solucionador avanzado estadístico.")
+    val helpSolverModeText: String @Composable get() = s("• LOP Mode: Traditional Lines of Position. Strict 3-star limit. Best for verifying the classical method.\n• Iterative Mode: Advanced statistical solver. Allows 3+ stars. Provides internal precision estimate.\n• 1-Shot Mode: Instant position from a single image using the precise gravity 3D vector.", "• Mode LOP : Droites de hauteur traditionnelles. Limite stricte de 3 étoiles.\n• Mode Itératif : Solveur statistique avancé, 3 étoiles et plus.\n• Mode 1-Shot : Position instantanée depuis une seule image grâce au vecteur gravité 3D.", "• LOP: Líneas de posición clásicas.\n• Iterativo: Solucionador avanzado estadístico.\n• 1-Shot: Posición instantánea desde una sola imagen utilizando el vector gravedad 3D.")
 
     val vesselInfo: String @Composable get() = s("Vessel Information", "Informations du navire", "Información del barco")
     val shipSpeed: String @Composable get() = s("Ship's Speed (knots)", "Vitesse du navire (nœuds)", "Velocidad del barco (nudos)")
@@ -249,6 +249,11 @@ object S {
         "LOP : Affiche les lignes de position sur la carte près de la position estimée",
         "LOP: Muestra las líneas de posición en el mapa cerca de la posición estimada"
     )
+    val oneShotDesc: String @Composable get() = s(
+        "1-Shot: Instantly fixes your position using a single image, analyzing its precise camera orientation vs earth's gravity.",
+        "1-Shot : Fixe instantanément votre position à l'aide d'une seule image, en analysant son orientation vs la gravité de la Terre.",
+        "1-Shot: Fija instantáneamente tu posición usando una sola imagen, analizando la orientación respecto a la gravedad."
+    )
     val estimatedPosition: String @Composable get() = s("Estimated Position", "Position estimée", "Posición estimada")
     val latitudeLabel: String @Composable get() = s("Latitude (°N)", "Latitude (°N)", "Latitud (°N)")
     val latitudeRange: String @Composable get() = s("Latitude must be between -90 and 90", "La latitude doit être comprise entre -90 et 90", "La latitud debe estar entre -90 y 90")
@@ -257,6 +262,7 @@ object S {
     @Composable fun solverModeName(mode: SolverMode): String = when (mode) {
         SolverMode.ITERATIVE -> s("Iterative", "Itératif", "Iterativo")
         SolverMode.LOP -> "LOP"
+        SolverMode.ONE_SHOT -> "1-Shot"
     }
 
     // ─── Camera View ────────────────────────────────────────────────────────────

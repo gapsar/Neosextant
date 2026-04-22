@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         }
 
     // Averaging logic (synchronized for thread safety between sensor callback and coroutine)
-    private val pitchReadings: MutableList<Double> = java.util.Collections.synchronizedList(mutableListOf<Double>())
+    private val sensorReadings: MutableList<Pair<Double, SensorCalibrator.Vec3>> = java.util.Collections.synchronizedList(mutableListOf())
     @Volatile private var isAveragingPitch = false
 
     // H-04: Cached calibration offset to avoid SharedPreferences reads on sensor thread

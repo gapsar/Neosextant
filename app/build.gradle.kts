@@ -22,8 +22,8 @@ android {
         applicationId = "io.github.gapsar.neosextant"
         minSdk = 25
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.03"
+        versionCode = 6
+        versionName = "1.05"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

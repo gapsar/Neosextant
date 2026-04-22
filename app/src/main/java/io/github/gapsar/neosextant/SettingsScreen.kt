@@ -182,7 +182,11 @@ fun SettingsScreen(
                     }
                 }
                 Text(
-                    if (solverMode == SolverMode.ITERATIVE) S.iterativeDesc else S.lopDesc,
+                    when (solverMode) {
+                        SolverMode.ITERATIVE -> S.iterativeDesc
+                        SolverMode.LOP -> S.lopDesc
+                        SolverMode.ONE_SHOT -> S.oneShotDesc
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

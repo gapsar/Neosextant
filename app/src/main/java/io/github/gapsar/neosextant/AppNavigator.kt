@@ -31,7 +31,7 @@ fun AppNavigator(
     getCurrentPitch: () -> Double?,
     getRawPitch: () -> Double?,
     startPitchAveraging: () -> Unit,
-    stopPitchAveraging: () -> Double?,
+    stopPitchAveraging: () -> Pair<Double?, SensorCalibrator.Vec3?>,
     // Calibration
     saveCalibrationOffset: (Double) -> Unit,
     getCalibrationOffset: () -> Double,
