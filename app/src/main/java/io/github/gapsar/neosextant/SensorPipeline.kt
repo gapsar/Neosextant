@@ -73,4 +73,26 @@ class SensorPipeline(private val calibrator: SensorCalibrator) {
 
         return SensorCalibrator.Vec3(unitG.x, rotatedY, rotatedZ)
     }
+
+    /**
+     * Applies only the legacy pitch offset rotation to an already-normalized gravity vector.
+     * Used by the AdaptiveSensorFusion path where calibration and normalization
+     * are handled upstream.
+     *
+     * @param unitGravity A unit vector representing gravity direction (already calibrated & normalized).
+     * @param pitchOffsetDeg The horizon calibration offset in degrees.
+     * @return The rotated gravity unit vector.
+     */
+    fun applyPitchOffset(unitGravity: SensorCalibrator.Vec3, pitchOffsetDeg: Double): SensorCalibrator.Vec3 {
+        if (pitchOffsetDeg == 0.0) return unitGravity
+
+        val thetaRad = Math.toRadians(pitchOffsetDeg)
+        val cos = cos(thetaRad).toFloat()
+        val sin = sin(thetaRad).toFloat()
+
+        val rotatedY = unitGravity.y * cos - unitGravity.z * sin
+        val rotatedZ = unitGravity.y * sin + unitGravity.z * cos
+
+        return SensorCalibrator.Vec3(unitGravity.x, rotatedY, rotatedZ)
+    }
 }

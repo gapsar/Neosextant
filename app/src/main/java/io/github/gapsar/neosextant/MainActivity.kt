@@ -31,13 +31,14 @@ import java.util.concurrent.TimeUnit
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
-    private var rotationVectorSensor: Sensor? = null
-    private var gravitySensor: Sensor? = null
-    private var accelerometer: Sensor? = null // Fallback if TYPE_GRAVITY unavailable
+    private var accelerometer: Sensor? = null
+    private var gyroscope: Sensor? = null
+    private var hasGyroscope: Boolean = false
 
     // Automation: Sensor Pipeline
     lateinit var sensorCalibrator: SensorCalibrator
     internal lateinit var sensorPipeline: SensorPipeline
+    private lateinit var sensorFusion: AdaptiveSensorFusion
 
     // State
     private val currentPhoneAltitudeDeg = mutableStateOf<Double?>(null)
@@ -121,6 +122,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         // Initialize Automation Classes
         sensorCalibrator = SensorCalibrator(this)
         sensorPipeline = SensorPipeline(sensorCalibrator)
+        sensorFusion = AdaptiveSensorFusion()
         cachedCalibrationOffset = getCalibrationOffset() // H-04: Cache offset on startup
 
         setupSensors() // Setup sensors
@@ -173,17 +175,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private fun setupSensors() {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        // Preferred: Fused Gravity sensor for much lower noise (gyro-stabilized)
-        gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
-        // Fallback: Raw accelerometer if TYPE_GRAVITY is unavailable
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        hasGyroscope = gyroscope != null
 
-        if (gravitySensor != null) {
-            Log.d("SensorSetup", "Using fused TYPE_GRAVITY sensor for reduced noise")
-        } else if (accelerometer != null) {
-            Log.w("SensorSetup", "TYPE_GRAVITY not available, falling back to raw TYPE_ACCELEROMETER")
+        if (hasGyroscope) {
+            Log.d("SensorSetup", "Gyroscope available — using adaptive complementary filter")
         } else {
-            Log.e("SensorSetup", "No gravity or accelerometer sensor available!")
+            Log.w("SensorSetup", "No gyroscope — falling back to EMA-filtered accelerometer")
+        }
+        if (accelerometer == null) {
+            Log.e("SensorSetup", "No accelerometer sensor available!")
         }
     }
 
@@ -231,10 +233,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     override fun onResume() {
         super.onResume()
         TimeSynchronizer.sync(this)
-        // Prefer fused gravity sensor; fall back to raw accelerometer
-        val sensor = gravitySensor ?: accelerometer
-        sensor?.also {
-             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        sensorFusion.reset() // Fresh state on resume to avoid stale gyro predictions
+        accelerometer?.also {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
+        gyroscope?.also {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
     }
 
@@ -245,32 +249,51 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent?) {
         event?.let {
-               if (it.sensor.type == Sensor.TYPE_GRAVITY || it.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-                // Step A: Gravity vector (from fused TYPE_GRAVITY or fallback TYPE_ACCELEROMETER)
-                val raw = SensorCalibrator.Vec3(it.values[0], it.values[1], it.values[2])
-                currentRawAccel.value = raw
+            when (it.sensor.type) {
+                Sensor.TYPE_GYROSCOPE -> {
+                    // Feed gyro data to fusion filter for gravity prediction
+                    sensorFusion.onGyroscopeChanged(
+                        it.values[0], it.values[1], it.values[2],
+                        it.timestamp
+                    )
+                }
+                Sensor.TYPE_ACCELEROMETER -> {
+                    val raw = SensorCalibrator.Vec3(it.values[0], it.values[1], it.values[2])
+                    currentRawAccel.value = raw
 
-                // M-06: Compute processGravity for raw (offset=0)
-                val rawGravity = sensorPipeline.processGravity(raw, 0.0)
-                val cameraVector = SensorCalibrator.Vec3(0f, 0f, -1f)
+                    // Step 1: Apply sphere-fit calibration (bias + scale correction)
+                    val calibrated = sensorCalibrator.applyCalibration(raw)
 
-                // Raw pitch (without offset)
-                val rawDot = rawGravity.x * cameraVector.x + rawGravity.y * cameraVector.y + rawGravity.z * cameraVector.z
-                val rawThetaDeg = Math.toDegrees(Math.acos(rawDot.coerceIn(-1f, 1f).toDouble()))
-                val rawAltitude = 90.0 - rawThetaDeg
-                currentRawPhoneAltitudeDeg.value = rawAltitude
+                    // Step 2: Adaptive complementary filter → fused gravity unit vector
+                    val fusedGravity = if (hasGyroscope) {
+                        sensorFusion.onAccelerometerChanged(calibrated)
+                    } else {
+                        sensorFusion.onAccelerometerChangedNoGyro(calibrated)
+                    }
 
-                // Calibrated pitch: apply offset via 3D rotation in processGravity
-                val offset = cachedCalibrationOffset
-                val calibratedGravity = sensorPipeline.processGravity(raw, offset)
-                val calDot = calibratedGravity.x * cameraVector.x + calibratedGravity.y * cameraVector.y + calibratedGravity.z * cameraVector.z
-                val calThetaDeg = Math.toDegrees(Math.acos(calDot.coerceIn(-1f, 1f).toDouble()))
-                val altitude = 90.0 - calThetaDeg
+                    // Step 3: Raw pitch (without horizon calibration offset)
+                    val cameraVector = SensorCalibrator.Vec3(0f, 0f, -1f)
+                    val rawDot = fusedGravity.x * cameraVector.x +
+                                 fusedGravity.y * cameraVector.y +
+                                 fusedGravity.z * cameraVector.z
+                    val rawThetaDeg = Math.toDegrees(Math.acos(rawDot.coerceIn(-1f, 1f).toDouble()))
+                    val rawAltitude = 90.0 - rawThetaDeg
+                    currentRawPhoneAltitudeDeg.value = rawAltitude
 
-                currentPhoneAltitudeDeg.value = altitude
+                    // Step 4: Calibrated pitch (with horizon offset applied)
+                    val offset = cachedCalibrationOffset
+                    val offsetGravity = sensorPipeline.applyPitchOffset(fusedGravity, offset)
+                    val calDot = offsetGravity.x * cameraVector.x +
+                                 offsetGravity.y * cameraVector.y +
+                                 offsetGravity.z * cameraVector.z
+                    val calThetaDeg = Math.toDegrees(Math.acos(calDot.coerceIn(-1f, 1f).toDouble()))
+                    val altitude = 90.0 - calThetaDeg
 
-                if (isAveragingPitch) {
-                    synchronized(pitchReadings) { pitchReadings.add(altitude) }
+                    currentPhoneAltitudeDeg.value = altitude
+
+                    if (isAveragingPitch) {
+                        synchronized(sensorReadings) { sensorReadings.add(Pair(altitude, offsetGravity)) }
+                    }
                 }
             }
         }
@@ -296,26 +319,30 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     // H-03: Fix race condition — set flag inside synchronized block
     fun startPitchAveraging() {
-        synchronized(pitchReadings) {
-            pitchReadings.clear()
+        synchronized(sensorReadings) {
+            sensorReadings.clear()
             isAveragingPitch = true
         }
         Log.d("MainActivity", "Started pitch averaging")
     }
 
-    fun stopPitchAveraging(): Double? {
+    fun stopPitchAveraging(): Pair<Double?, SensorCalibrator.Vec3?> {
         isAveragingPitch = false
         var count = 0
-        val average = synchronized(pitchReadings) {
-            count = pitchReadings.size
-            if (pitchReadings.isNotEmpty()) {
-                pitchReadings.average()
+        val result = synchronized(sensorReadings) {
+            count = sensorReadings.size
+            if (sensorReadings.isNotEmpty()) {
+                val avgAlt = sensorReadings.map { it.first }.average()
+                val avgX = sensorReadings.map { it.second.x }.average().toFloat()
+                val avgY = sensorReadings.map { it.second.y }.average().toFloat()
+                val avgZ = sensorReadings.map { it.second.z }.average().toFloat()
+                Pair(avgAlt, SensorCalibrator.Vec3(avgX, avgY, avgZ))
             } else {
-                currentPhoneAltitudeDeg.value
+                Pair(currentPhoneAltitudeDeg.value, null)
             }
         }
-        Log.d("MainActivity", "Stopped pitch averaging. Count: $count, Average: $average")
-        return average
+        Log.d("MainActivity", "Stopped pitch averaging. Count: $count")
+        return result
     }
 
     // Calibration Persistence
