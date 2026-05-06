@@ -75,9 +75,9 @@ object S {
         "Astronavigation", "L’Astronavigation", "La Astronavegación"
     )
     val crawlNoSextant: String @Composable get() = s(
-        "But here, no need for a complex sextant, an up-to-date timepiece, a visible horizon, or doing a whole bunch of calculations, just take three photos of the stars and presto!",
-        "Mais ici, pas besoin de sextant complexe, de garde-temps à jour, d'un horizon visible ou encore d'effectuer tout un tas de calculs, prenez simplement trois photos des étoiles et hop !",
-        "Pero aquí, no hay necesidad de un sextante complejo, de un cronómetro actualizado, de un horizonte visible o de realizar un montón de cálculos, ¡simplemente toma tres fotos de las estrellas y listo!"
+        "But here, no need for a complex sextant, an up-to-date timepiece, a visible horizon, or doing a whole bunch of calculations, just take a few photos of the stars and presto!",
+        "Mais ici, pas besoin de sextant complexe, de garde-temps à jour, d'un horizon visible ou encore d'effectuer tout un tas de calculs, prenez simplement quelques photos des étoiles et hop !",
+        "Pero aquí, no hay necesidad de un sextante complejo, de un cronómetro actualizado, de un horizonte visible o de realizar un montón de cálculos, ¡simplemente toma algunas fotos de las estrellas y listo!"
     )
     val crawlPosition: String @Composable get() = s(
         "You get your position.",
@@ -132,11 +132,9 @@ object S {
                 "Sin embargo, para las Condiciones meteorológicas, ¡deben completarse dondequiera que estés!"
     )
     val narrationSolver: String @Composable get() = s(
-        "Here, you choose the solver mode. By default, it is on 'Iterative' to automatically triangulate your position, without the need for a prior estimated position. If you select 'LOP', the resolution will be done via lines of position (Marcq Saint-Hilaire method) and these will be displayed on the final map. You must enter an estimated position in this case.",
-        "Ici, vous choisissez le mode de résolution. Par défaut, il est sur « Itératif » pour trianguler automatiquement votre position, sans besoin de position estimée au préalable. " +
-                "Si vous sélectionnez « LOP », la résolution sera effectué via des droites de hauteurs (technique de Marcq Saint-Hilaire) et ces dernières seront affichées sur la carte finale. Vous devez entrer une position estimée dans ce cas.",
-        "Aquí, eliges el modo de resolución. Por defecto, está en 'Iterativo' para triangular automáticamente tu posición, sin necesidad de una posición estimada previa. " +
-                "Si seleccionas 'LOP', la resolución se realizará a través de líneas de posición (técnica de Marcq Saint-Hilaire) y estas se mostrarán en el mapa final. Debes ingresar una posición estimada en este caso."
+        "Here, you choose the solver mode. 'Iterative' triangulates your position from multiple images. 'LOP' draws classical lines of position (requires an estimated position). The new '1-Shot' mode calculates an instant fix from a single image using the 3D gravity vector.",
+        "Ici, vous choisissez le mode de résolution. « Itératif » triangule votre position à partir de plusieurs images. « LOP » trace des droites de hauteur classiques (nécessite une position estimée). Le nouveau mode « 1-Shot » calcule une position instantanée depuis une seule image grâce au vecteur gravité.",
+        "Aquí, eliges el modo de resolución. 'Iterativo' triangula tu posición desde varias imágenes. 'LOP' traza líneas de posición clásicas (requiere posición estimada). El nuevo modo '1-Shot' calcula una posición instantánea desde una sola imagen usando el vector gravedad."
     )
     val narrationCalHorizon: String @Composable get() = s(
         "Let's move on to the calibration window! Let's start with the simplest: the horizon calibration. This reduces the alignment error between the camera and the phone's accelerometer. Simply enter the height at which your phone is located (relative to sea level), align the horizon with the red line, then click on 'Set Horizon'.",
@@ -166,18 +164,18 @@ object S {
                 "(una pequeña animación te confirmará que la foto se está tomando)."
     )
     val narrationResults: String @Composable get() = s(
-        "Once the photo is taken, a thumbnail will appear in the panel visible here and you will be informed of the progress of the analysis. Processing can take up to 15 seconds. A position will only be available after three validated images.",
+        "Once the photo is taken, a thumbnail will appear in the panel visible here and you will be informed of the progress of the analysis. Processing can take up to 15 seconds. A position will be available after one or three validated images, depending on the chosen mode.",
         "Une fois la photo prise, une miniature apparaîtra dans le panneau visible ici et vous serez mis au courant du progrès de l'analyse. Le traitement peut prendre jusqu’à 15 secondes. " +
-                "Une position ne sera disponible qu’après trois images validées.",
+                "Une position sera disponible après une ou trois images validées, selon le mode choisi.",
         "Una vez tomada la foto, aparecerá una miniatura en el panel visible aquí y se te informará del progreso del análisis. El procesamiento puede tardar hasta 15 segundos. " +
-                "Una posición solo estará disponible después de tres imágenes validadas."
+                "Una posición estará disponible después de una o tres imágenes validadas, según el modo elegido."
     )
     val narrationMapIterative: String @Composable get() = s(
-        "After the capture and resolution of 3 images, you will be automatically redirected to the Map page! If you chose the iterative process, it works by starting from the 0,0 coordinates and adding an offset at each iteration until it matches your measurements. And there you go! Your position is determined.",
-        "Après la capture et la résolution de 3 images, vous serez redirigé automatiquement vers la page Carte ! " +
+        "After the capture and resolution of your images, you will be automatically redirected to the Map page! If you chose the iterative process, it works by starting from the 0,0 coordinates and adding an offset at each iteration until it matches your measurements. And there you go! Your position is determined.",
+        "Après la capture et la résolution de vos images, vous serez redirigé automatiquement vers la page Carte ! " +
                 "Si vous avez choisi le processus itératif, Il fonctionne en partant des coordonées 0,0  " +
                 "et en ajoutant un décalage a chaque itération jusqu'à correspondre à vos mesures. Et voilà ! Votre position est déterminée.",
-        "¡Después de la captura y resolución de 3 imágenes, serás redirigido automáticamente a la página del Mapa! " +
+        "¡Después de la captura y resolución de tus imágenes, serás redirigido automáticamente a la página del Mapa! " +
                 "Si elegiste el proceso iterativo, funciona partiendo de las coordenadas 0,0 " +
                 "y agregando un desfase en cada iteración hasta coincidir con tus mediciones. ¡Y listo! Tu posición está determinada."
     )

@@ -115,26 +115,28 @@ fun SettingsScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                 Text(S.vesselInfo, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                ValidatedNumberField(
-                    value = shipSpeed,
-                    onValueChange = onShipSpeedChange,
-                    label = S.shipSpeed,
-                    imeAction = ImeAction.Next,
-                    validator = { it >= 0.0 },
-                    errorMessage = S.speedNegative,
-                    clamp = { it.coerceAtLeast(0.0) },
-                    defaultValue = 0.0
-                )
-                ValidatedNumberField(
-                    value = shipHeading,
-                    onValueChange = onShipHeadingChange,
-                    label = S.shipHeading,
-                    imeAction = ImeAction.Next,
-                    validator = { it in 0.0..360.0 },
-                    errorMessage = S.headingRange,
-                    clamp = { it.coerceIn(0.0, 360.0) },
-                    defaultValue = 0.0
-                )
+                if (solverMode != SolverMode.ONE_SHOT) {
+                    ValidatedNumberField(
+                        value = shipSpeed,
+                        onValueChange = onShipSpeedChange,
+                        label = S.shipSpeed,
+                        imeAction = ImeAction.Next,
+                        validator = { it >= 0.0 },
+                        errorMessage = S.speedNegative,
+                        clamp = { it.coerceAtLeast(0.0) },
+                        defaultValue = 0.0
+                    )
+                    ValidatedNumberField(
+                        value = shipHeading,
+                        onValueChange = onShipHeadingChange,
+                        label = S.shipHeading,
+                        imeAction = ImeAction.Next,
+                        validator = { it in 0.0..360.0 },
+                        errorMessage = S.headingRange,
+                        clamp = { it.coerceIn(0.0, 360.0) },
+                        defaultValue = 0.0
+                    )
+                }
                 ValidatedNumberField(
                     value = initialAltitude,
                     onValueChange = onAltitudeChange,
