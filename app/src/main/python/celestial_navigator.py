@@ -498,10 +498,16 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
         import json
         import traceback
 
-        # --- 1. Time and Greenwich Sidereal Time ---
+        # --- 1. Time and Earth Rotation Angle ---
+        # We use ERA (Earth Rotation Angle) instead of GST (Greenwich Sidereal Time)
+        # because the plate-solved RA is in the ICRS/J2000 frame, and ERA is
+        # measured from the Celestial Intermediate Origin (CIO) which is fixed
+        # in ICRS.  GST is measured from the mean equinox of date, which drifts
+        # ~0.014°/year due to precession — causing a systematic westward
+        # longitude error (~20 nm by 2026).
         t = Time(time_iso)
-        gst_deg = t.sidereal_time('mean', 'greenwich').degree
-        print(f"Python: 1-Shot: time={time_iso}, GST={gst_deg:.4f}°")
+        era_deg = t.earth_rotation_angle('tio').deg
+        print(f"Python: 1-Shot: time={time_iso}, ERA={era_deg:.4f}°")
 
         # --- 2. Reconstruct tetra3's rotation matrix from RA/Dec/Roll ---
         # tetra3 defines R as mapping ICRS vectors to camera-frame vectors.
@@ -592,12 +598,12 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
         lat_rad = np.arcsin(np.clip(zenith_icrs[2], -1.0, 1.0))
         lat_deg_val = np.degrees(lat_rad)
 
-        # Zenith RA = Local Sidereal Time
+        # Zenith RA in ICRS
         lst_rad = np.arctan2(zenith_icrs[1], zenith_icrs[0])
         lst_deg = np.degrees(lst_rad) % 360
 
-        # Longitude = LST − GST
-        lon_deg_val = (lst_deg - gst_deg + 180) % 360 - 180
+        # Longitude = RA_icrs − ERA
+        lon_deg_val = (lst_deg - era_deg + 180) % 360 - 180
 
         result = {
             "fixed_latitude": float(lat_deg_val),
@@ -605,7 +611,7 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
             "final_shift_nm": 0.0
         }
         print(f"Python: 1-Shot Fix: Lat={lat_deg_val:.4f}°, Lon={lon_deg_val:.4f}°")
-        print(f"Python: 1-Shot Fix: LST={lst_deg:.4f}°, GST={gst_deg:.4f}°")
+        print(f"Python: 1-Shot Fix: LST_icrs={lst_deg:.4f}°, ERA={era_deg:.4f}°")
         return json.dumps(result)
 
     except Exception as e:
