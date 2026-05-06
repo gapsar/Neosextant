@@ -71,11 +71,46 @@ class HistoryRepository(private val context: Context) {
     }
 
     fun deleteEntry(entryId: Long) {
+        // S-02: Delete associated image files before removing the DB entry
+        try {
+            val entity = historyDao.getById(entryId)
+            if (entity != null) {
+                val images = deserializeImages(entity.imagesJson)
+                images.forEach { img ->
+                    try {
+                        val path = img.uri.path
+                        if (path != null) {
+                            val file = java.io.File(path)
+                            if (file.exists()) {
+                                file.delete()
+                                Log.d("HistoryRepo", "Deleted image file: ${file.name}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w("HistoryRepo", "Failed to delete image file", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("HistoryRepo", "Failed to clean up image files for entry $entryId", e)
+        }
         historyDao.deleteById(entryId)
         Log.d("HistoryRepo", "Deleted entry $entryId")
     }
 
     fun clearAll() {
+        // S-02: Delete all history image files before clearing DB
+        try {
+            val historyDir = java.io.File(context.getExternalFilesDir(null), "history_images")
+            if (historyDir.exists() && historyDir.isDirectory) {
+                historyDir.listFiles()?.forEach { file ->
+                    file.delete()
+                }
+                Log.d("HistoryRepo", "Deleted all history image files")
+            }
+        } catch (e: Exception) {
+            Log.w("HistoryRepo", "Failed to clean up history image directory", e)
+        }
         historyDao.deleteAll()
         Log.d("HistoryRepo", "Cleared all history")
     }

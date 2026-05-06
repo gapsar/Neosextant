@@ -99,6 +99,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         android.util.Log.e("Tutorial", "=== onCreate START ===")
         // OSMDroid configuration
         Configuration.getInstance().load(this, PreferenceManager.getDefaultSharedPreferences(this))
+        // S-03: Cap tile cache at 50 MB to prevent unbounded storage growth
+        Configuration.getInstance().tileFileSystemCacheMaxBytes = 50L * 1024 * 1024
+        Configuration.getInstance().tileFileSystemCacheTrimBytes = 40L * 1024 * 1024
+
+        // S-04: Delete orphaned .jpg files from app storage root on startup
+        // These are full-resolution captures from previous sessions that were never cleaned up
+        cleanupOrphanedImages()
         
         // Ensure Chaquopy temp dir exists to prevent offline startup crash
         val chaquopyTmpDir = java.io.File(cacheDir, "chaquopy/tmp")
@@ -385,6 +392,32 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         with(sharedPref.edit()) {
             putBoolean("tutorial_completed", true)
             apply()
+        }
+    }
+
+    /**
+     * S-04: Deletes orphaned .jpg files from the app's external files root.
+     * These are full-resolution captures from previous sessions that were
+     * never cleaned up (e.g., the app was killed before history save).
+     * Files in subdirectories (history_images/, osmdroid/) are left untouched.
+     */
+    private fun cleanupOrphanedImages() {
+        try {
+            val appDir = getExternalFilesDir(null) ?: return
+            val orphans = appDir.listFiles { file ->
+                file.isFile && file.name.endsWith(".jpg", ignoreCase = true)
+            }
+            if (orphans != null && orphans.isNotEmpty()) {
+                var totalBytes = 0L
+                orphans.forEach { file ->
+                    totalBytes += file.length()
+                    file.delete()
+                }
+                val totalMB = totalBytes / (1024.0 * 1024.0)
+                Log.d("StorageCleanup", "Deleted ${orphans.size} orphaned images (${String.format("%.1f", totalMB)} MB)")
+            }
+        } catch (e: Exception) {
+            Log.w("StorageCleanup", "Failed to clean up orphaned images", e)
         }
     }
 }

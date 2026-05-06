@@ -348,6 +348,24 @@ fun CameraView(
                         imagesJson = imagesJsonStr
                     )
                 )
+
+                // S-01: Delete original full-resolution photos after history save
+                // The compressed copies in history_images/ are kept; originals (~10 MB each) are no longer needed.
+                solvedImages.forEach { img ->
+                    try {
+                        val originalPath = img.uri.path
+                        if (originalPath != null) {
+                            val originalFile = java.io.File(originalPath)
+                            // Only delete if it's NOT already in history_images (avoid deleting history copies)
+                            if (originalFile.exists() && !originalPath.contains("history_images")) {
+                                originalFile.delete()
+                                Log.d("StorageCleanup", "Deleted original: ${originalFile.name}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w("StorageCleanup", "Failed to delete original image", e)
+                    }
+                }
                 
                 isSolving = false
                 

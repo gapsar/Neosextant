@@ -16,6 +16,9 @@ interface HistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun insertAll(entries: List<PositionEntryEntity>)
 
+    @Query("SELECT * FROM position_history WHERE id = :entryId")
+    fun getById(entryId: Long): PositionEntryEntity?
+
     @Query("DELETE FROM position_history WHERE id = :entryId")
     fun deleteById(entryId: Long)
 
