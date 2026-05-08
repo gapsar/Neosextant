@@ -219,32 +219,32 @@ fun CameraView(
                             org.json.JSONObject(solveResultJsonStr)
                         }
                     } else {
-                        // --- C-04: LOP SOLVER ---
-                        // Collect LOP JSON results from each solved image
-                        val lopJsons = solvedImages.mapNotNull { img ->
-                            val ld = img.lopData ?: return@mapNotNull null
-                            val j = org.json.JSONObject()
-                            j.put("intercept_nm", ld.interceptNm)
-                            j.put("azimuth_deg", ld.azimuthDeg)
-                            j.put("observed_altitude_deg", ld.observedAltitudeDeg)
-                            j.put("computed_altitude_deg", ld.computedAltitudeDeg)
-                            j.put("error", JSONObject.NULL)
-                            j.toString()
+                        // --- C-04: LOP SOLVER (iterative) ---
+                        // Build observation list in the same format as the iterative solver
+                        val obsList = org.json.JSONArray()
+                        solvedImages.forEach { img ->
+                            val obs = org.json.JSONObject()
+                            obs.put("ra", img.tetra3Result.raDeg)
+                            obs.put("dec", img.tetra3Result.decDeg)
+                            obs.put("alt", img.measuredHeight ?: 0.0)
+                            obs.put("time_iso", img.timestamp)
+                            obsList.put(obs)
                         }
 
-                        if (lopJsons.size < 3) {
-                            org.json.JSONObject().apply { put("error", "Need 3 LOPs but only ${lopJsons.size} available") }
-                        } else {
-                            val solveResultJsonStr = pythonScript.callAttr(
-                                "lop_center_compute",
-                                lopJsons[0],
-                                lopJsons[1],
-                                lopJsons[2],
-                                latitude.toDoubleOrNull() ?: 0.0,
-                                longitude.toDoubleOrNull() ?: 0.0
-                            ).toString()
-                            org.json.JSONObject(solveResultJsonStr)
-                        }
+                        val heightM = altitude.toDoubleOrNull() ?: 0.0
+                        val pressureHpa = pressure.toDoubleOrNull() ?: 1013.25
+                        val temperatureC = temperature.toDoubleOrNull() ?: 15.0
+
+                        val solveResultJsonStr = pythonScript.callAttr(
+                            "solve_lop_iterative",
+                            obsList.toString(),
+                            latitude.toDoubleOrNull() ?: 0.0,
+                            longitude.toDoubleOrNull() ?: 0.0,
+                            heightM,
+                            pressureHpa,
+                            temperatureC
+                        ).toString()
+                        org.json.JSONObject(solveResultJsonStr)
                     }
                 }
 
@@ -755,10 +755,6 @@ fun CameraView(
 
                                                 // --- LOP Calculation (only in LOP mode) ---
                                                 if (solverMode == SolverMode.LOP) {
-                                                    val localDateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(captureTime)
-                                                    val localTimeStr = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(captureTime)
-                                                    val timezoneStr = TimeZone.getDefault().id
-
                                                     val lopResultJsonStr = pythonScript.callAttr(
                                                         "lop_compute",
                                                         tetra3Result.raDeg,
@@ -769,9 +765,7 @@ fun CameraView(
                                                         pressure.toDoubleOrNull() ?: 1013.25,
                                                         temperature.toDoubleOrNull() ?: 15.0,
                                                         measuredHeight ?: 0.0,
-                                                        localDateStr,
-                                                        localTimeStr,
-                                                        timezoneStr
+                                                        newImageInfo.timestamp // ISO UTC timestamp
                                                     ).toString()
 
                                                     val lopJson = JSONObject(lopResultJsonStr)

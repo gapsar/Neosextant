@@ -302,32 +302,24 @@ def lop_compute(
     pressure_hpa,
     temperature_celsius,
     sextant_altitude_deg,
-    local_date_str,
-    local_time_str,
-    timezone_str
+    time_iso
 ):
     """
     Calculates the intercept from a celestial observation.
-    This function replaces the mock function from the test script and uses
-    the real astropy-based calculation logic.
 
     Args:
         ra_from_image (float): Right Ascension from the image solver.
         dec_from_image (float): Declination from the image solver.
         estimated_latitude (float): Assumed latitude in degrees.
         estimated_longitude (float): Assumed longitude in degrees.
-        height_of_eye_m (float): Observer's height of eye in meters.
+        height_of_eye_m (float): Observer's height of eye in meters (0 for sensor-based altitude).
         pressure_hpa (float): Atmospheric pressure in hPa.
         temperature_celsius (float): Air temperature in Celsius.
         sextant_altitude_deg (float): The raw altitude measured with the sextant.
-        local_date_str (str): Local date of observation ("YYYY-MM-DD").
-        local_time_str (str): Local time of observation ("HH:MM:SS.fff").
-        timezone_str (str): Observer's IANA timezone (e.g., 'Europe/Paris').
+        time_iso (str): Observation time as ISO 8601 UTC string (e.g. '2026-05-08T12:00:00.000').
 
     Returns:
         str: A JSON string with the calculation results or an error.
-             Example success: '{"intercept_nm": -2.5, "azimuth_deg": 245.1, "error": null}'
-             Example failure: '{"error": "Invalid timezone specified"}'
     """
     print("Python: lop_compute function started.")
     try:
@@ -335,18 +327,10 @@ def lop_compute(
         dip_correction_deg = _calculate_dip_correction_deg(height_of_eye_m)
         ho_deg = sextant_altitude_deg - dip_correction_deg
 
-        # 2. Combine and convert observation time to UTC.
-        local_datetime_str = f"{local_date_str} {local_time_str}"
-        try:
-            naive_dt = datetime.strptime(local_datetime_str, "%Y-%m-%d %H:%M:%S.%f")
-        except ValueError:
-            naive_dt = datetime.strptime(local_datetime_str, "%Y-%m-%d %H:%M:%S")
-
-        local_tz = pytz.timezone(timezone_str)
-        utc_dt = local_tz.localize(naive_dt).astimezone(pytz.utc)
+        # 2. Parse observation time (already UTC ISO 8601).
+        observation_time = Time(time_iso)
 
         # 3. Set up Astropy objects for calculation.
-        observation_time = Time(utc_dt)
         observer_location = EarthLocation(
             lat=estimated_latitude * u.deg,
             lon=estimated_longitude * u.deg,
@@ -473,6 +457,112 @@ def lop_center_compute(lop_1_json, lop_2_json, lop_3_json, estimated_latitude, e
         error_msg = f"An exception occurred in lop_center_compute: {e}"
         print(f"Python: {error_msg}\n{traceback.format_exc()}")
         return json.dumps({'error': error_msg})
+
+
+def solve_lop_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.0, pressure_hpa=1013.25, temperature_c=15.0):
+    """
+    Iterative LOP position solver.
+
+    Like solve_iterative, this re-computes intercepts from the corrected
+    position at each iteration so that the linear approximation stays valid
+    even when the assumed position is far from truth.
+
+    obs_list_json: JSON string of list of dicts:
+       [{'ra':, 'dec':, 'alt':, 'time_iso':}, ...]
+    estimated_lat: The user provided estimated latitude (float)
+    estimated_lon: The user provided estimated longitude (float)
+    height_m: Observer height above sea level in meters
+    pressure_hpa: Atmospheric pressure in hPa for refraction correction
+    temperature_c: Air temperature in Celsius for refraction correction
+
+    Returns JSON with: fixed_latitude, fixed_longitude, iterations, final_shift_nm
+    On error: returns JSON with 'error' key.
+    """
+    try:
+        obs_list = json.loads(obs_list_json)
+
+        if len(obs_list) < 3:
+            return json.dumps({"error": "Need at least 3 observations for LOP solve"})
+
+        # 1. Parse Times
+        times = [Time(obs['time_iso']) for obs in obs_list]
+
+        # Start at the user-provided Estimated Position
+        current_lat = float(estimated_lat)
+        current_lon = float(estimated_lon)
+
+        print(f"Python: LOP iterative solver seeded at {current_lat:.4f}, {current_lon:.4f}")
+
+        # 2. Iterate with convergence and divergence checks
+        MAX_ITERATIONS = 20
+        CONVERGENCE_THRESHOLD = 0.01  # NM
+        MAX_DIVERGENCE_STREAK = 3
+
+        prev_shift = float('inf')
+        divergence_count = 0
+        final_shift = 0.0
+        iterations_done = 0
+
+        for i in range(MAX_ITERATIONS):
+            intercepts = []
+            azimuths = []
+
+            for j, obs in enumerate(obs_list):
+                ic, az = core_compute_intercept(
+                    obs['ra'], obs['dec'], times[j],
+                    current_lat, current_lon, obs['alt'],
+                    height_m=height_m, pressure_hpa=pressure_hpa, temperature_c=temperature_c
+                )
+                intercepts.append(ic)
+                azimuths.append(az)
+
+            # Solve Linear Shift
+            A = np.array([[np.sin(np.deg2rad(az)), np.cos(np.deg2rad(az))] for az in azimuths])
+            b = np.array(intercepts)
+
+            correction, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+            d_east, d_north = correction[0], correction[1]
+
+            shift_mag = np.sqrt(d_east**2 + d_north**2)
+            final_shift = float(shift_mag)
+            iterations_done = i + 1
+
+            # Apply shift
+            lat_rad = np.deg2rad(current_lat)
+            current_lat += d_north / 60.0
+            current_lon += d_east / (60.0 * np.cos(lat_rad))
+
+            print(f"Python: LOP Iteration {i+1}: Shift {shift_mag:.4f} NM. Pos: {current_lat:.4f}, {current_lon:.4f}")
+
+            # Check convergence
+            if shift_mag < CONVERGENCE_THRESHOLD:
+                print(f"Python: LOP converged after {i+1} iterations (shift {shift_mag:.4f} < {CONVERGENCE_THRESHOLD} NM)")
+                break
+
+            # Check divergence
+            if shift_mag >= prev_shift:
+                divergence_count += 1
+                if divergence_count >= MAX_DIVERGENCE_STREAK:
+                    print(f"Python: LOP WARNING - Divergence detected after {i+1} iterations")
+                    break
+            else:
+                divergence_count = 0
+
+            prev_shift = shift_mag
+        else:
+            print(f"Python: LOP WARNING - Max iterations ({MAX_ITERATIONS}) reached. Final shift: {final_shift:.4f} NM")
+
+        return json.dumps({
+            "fixed_latitude": float(current_lat),
+            "fixed_longitude": float(current_lon),
+            "iterations": iterations_done,
+            "final_shift_nm": final_shift
+        })
+
+    except Exception as e:
+        error_msg = f"Error in solve_lop_iterative: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
 
 
 
