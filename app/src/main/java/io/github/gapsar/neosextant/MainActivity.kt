@@ -26,6 +26,8 @@ import io.github.gapsar.neosextant.model.*
 import io.github.gapsar.neosextant.ui.theme.NeosextantTheme
 import org.osmdroid.config.Configuration
 import java.util.concurrent.TimeUnit
+import kotlin.math.exp
+import kotlin.math.sqrt
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,14 +47,32 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val currentRawPhoneAltitudeDeg = mutableStateOf<Double?>(null)
     val currentRawAccel = mutableStateOf(SensorCalibrator.Vec3(0f, 0f, 0f))
 
+    // Gyroscope-gated rolling buffer for ship-motion-compensated averaging.
+    // Continuously collects (altitude, gravity, gyroMag) tuples so that when
+    // the shutter fires, we can compute a stability-weighted average that
+    // favours readings from the quietest moments over the last ~3 seconds.
+    private data class StabilityWeightedSample(
+        val altitude: Double,
+        val gravity: SensorCalibrator.Vec3,
+        val gyroMagnitude: Float
+    )
+    private val rollingBuffer = java.util.ArrayDeque<StabilityWeightedSample>(ROLLING_BUFFER_SIZE)
+    @Volatile private var currentGyroMagnitude: Float = 0f
+
+    companion object {
+        /** ~3 seconds at SENSOR_DELAY_GAME (~50 Hz). */
+        private const val ROLLING_BUFFER_SIZE = 150
+        /** Weighting steepness: 0.5 rad/s → weight ≈ 0.14, 1.0 rad/s → weight ≈ 0.0003. */
+        private const val GYRO_WEIGHT_K = 8.0
+    }
+
     // Permission for Notifications
     private val requestNotificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             // Log result or handle denial
         }
 
-    // Averaging logic (synchronized for thread safety between sensor callback and coroutine)
-    private val sensorReadings: MutableList<Pair<Double, SensorCalibrator.Vec3>> = java.util.Collections.synchronizedList(mutableListOf())
+    // Legacy averaging flag (kept for compatibility; the rolling buffer does the real work)
     @Volatile private var isAveragingPitch = false
 
     // H-04: Cached calibration offset to avoid SharedPreferences reads on sensor thread
@@ -263,6 +283,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         it.values[0], it.values[1], it.values[2],
                         it.timestamp
                     )
+                    // Track instantaneous angular velocity magnitude for
+                    // the stability-weighted rolling buffer.
+                    currentGyroMagnitude = sqrt(
+                        it.values[0] * it.values[0] +
+                        it.values[1] * it.values[1] +
+                        it.values[2] * it.values[2]
+                    )
                 }
                 Sensor.TYPE_ACCELEROMETER -> {
                     val raw = SensorCalibrator.Vec3(it.values[0], it.values[1], it.values[2])
@@ -298,8 +325,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
                     currentPhoneAltitudeDeg.value = altitude
 
-                    if (isAveragingPitch) {
-                        synchronized(sensorReadings) { sensorReadings.add(Pair(altitude, offsetGravity)) }
+                    // Always maintain the rolling buffer (even outside averaging)
+                    // so that 3 seconds of history is available the instant the
+                    // shutter fires.
+                    synchronized(rollingBuffer) {
+                        if (rollingBuffer.size >= ROLLING_BUFFER_SIZE) rollingBuffer.poll()
+                        rollingBuffer.add(
+                            StabilityWeightedSample(altitude, offsetGravity, currentGyroMagnitude)
+                        )
                     }
                 }
             }
@@ -324,32 +357,69 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         return currentRawPhoneAltitudeDeg.value
     }
 
-    // H-03: Fix race condition — set flag inside synchronized block
     fun startPitchAveraging() {
-        synchronized(sensorReadings) {
-            sensorReadings.clear()
-            isAveragingPitch = true
-        }
-        Log.d("MainActivity", "Started pitch averaging")
+        isAveragingPitch = true
+        Log.d("MainActivity", "Started pitch averaging (rolling buffer active)")
     }
 
+    /**
+     * Stops pitch averaging and returns the gyroscope-stability-weighted average
+     * altitude and gravity vector from the rolling buffer.
+     *
+     * Each sample is weighted by  w = exp(-k × gyroMag²)  so readings taken
+     * during stable moments (low angular velocity) dominate, and readings
+     * during ship sway / hand tremor are suppressed.
+     */
     fun stopPitchAveraging(): Pair<Double?, SensorCalibrator.Vec3?> {
         isAveragingPitch = false
-        var count = 0
-        val result = synchronized(sensorReadings) {
-            count = sensorReadings.size
-            if (sensorReadings.isNotEmpty()) {
-                val avgAlt = sensorReadings.map { it.first }.average()
-                val avgX = sensorReadings.map { it.second.x }.average().toFloat()
-                val avgY = sensorReadings.map { it.second.y }.average().toFloat()
-                val avgZ = sensorReadings.map { it.second.z }.average().toFloat()
-                Pair(avgAlt, SensorCalibrator.Vec3(avgX, avgY, avgZ))
-            } else {
-                Pair(currentPhoneAltitudeDeg.value, null)
-            }
+
+        val snapshot: List<StabilityWeightedSample>
+        synchronized(rollingBuffer) {
+            snapshot = rollingBuffer.toList()
         }
-        Log.d("MainActivity", "Stopped pitch averaging. Count: $count")
-        return result
+
+        if (snapshot.isEmpty()) {
+            Log.d("MainActivity", "Stopped pitch averaging. Rolling buffer empty.")
+            return Pair(currentPhoneAltitudeDeg.value, null)
+        }
+
+        var totalWeight = 0.0
+        var weightedAlt = 0.0
+        var weightedGx = 0.0
+        var weightedGy = 0.0
+        var weightedGz = 0.0
+
+        for (sample in snapshot) {
+            val w = exp(-GYRO_WEIGHT_K * sample.gyroMagnitude * sample.gyroMagnitude)
+            totalWeight += w
+            weightedAlt += w * sample.altitude
+            weightedGx += w * sample.gravity.x
+            weightedGy += w * sample.gravity.y
+            weightedGz += w * sample.gravity.z
+        }
+
+        if (totalWeight < 1e-9) {
+            Log.w("MainActivity", "All rolling-buffer samples had near-zero weight (constant motion)")
+            // Fall back to simple mean
+            val avgAlt = snapshot.map { it.altitude }.average()
+            val avgG = SensorCalibrator.Vec3(
+                snapshot.map { it.gravity.x.toDouble() }.average().toFloat(),
+                snapshot.map { it.gravity.y.toDouble() }.average().toFloat(),
+                snapshot.map { it.gravity.z.toDouble() }.average().toFloat()
+            )
+            Log.d("MainActivity", "Stopped pitch averaging. Fallback mean from ${snapshot.size} samples.")
+            return Pair(avgAlt, avgG)
+        }
+
+        val avgAlt = weightedAlt / totalWeight
+        val avgGravity = SensorCalibrator.Vec3(
+            (weightedGx / totalWeight).toFloat(),
+            (weightedGy / totalWeight).toFloat(),
+            (weightedGz / totalWeight).toFloat()
+        )
+
+        Log.d("MainActivity", "Stopped pitch averaging. Gyro-gated avg from ${snapshot.size} samples, totalWeight=%.2f".format(totalWeight))
+        return Pair(avgAlt, avgGravity)
     }
 
     // Calibration Persistence
