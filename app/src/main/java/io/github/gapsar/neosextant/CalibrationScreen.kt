@@ -54,6 +54,10 @@ fun CalibrationScreen(
     var currentPitch by remember { mutableStateOf(0.0) }
     var showAdvancedDialog by remember { mutableStateOf(false) }
 
+    // Multi-sample horizon calibration: accumulate 3 readings, then average
+    val REQUIRED_SAMPLES = 3
+    val calibrationOffsets = remember { mutableStateListOf<Double>() }
+
     // Update pitch reading periodically
     LaunchedEffect(Unit) {
         while (true) {
@@ -168,7 +172,7 @@ fun CalibrationScreen(
                     .padding(paddingValues)
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
                     text = S.alignHorizon,
@@ -207,6 +211,35 @@ fun CalibrationScreen(
                     style = MaterialTheme.typography.bodySmall
                 )
 
+                // Multi-sample calibration progress
+                if (calibrationOffsets.isNotEmpty()) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Calibration ${calibrationOffsets.size}/$REQUIRED_SAMPLES",
+                            color = Color.Green,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        calibrationOffsets.forEachIndexed { i, offset ->
+                            Text(
+                                text = "#${i + 1}: %.4f°".format(offset),
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (calibrationOffsets.size >= 2) {
+                            val runningAvg = calibrationOffsets.average()
+                            Text(
+                                text = "Running avg: %.4f°".format(runningAvg),
+                                color = Color.Yellow,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { showAdvancedDialog = true },
@@ -226,13 +259,34 @@ fun CalibrationScreen(
                             // True = -dipDeg
                             // Measured = currentPitch (We ensured this is Raw above)
                             val newOffset = -dipDeg - currentPitch
-                            onSaveCalibration(newOffset)
-                            onNavigateBack()
+                            calibrationOffsets.add(newOffset)
+
+                            if (calibrationOffsets.size >= REQUIRED_SAMPLES) {
+                                // All samples collected — save the averaged offset
+                                val averagedOffset = calibrationOffsets.average()
+                                Log.d("CalibrationScreen", "Multi-sample calibration complete. Offsets: $calibrationOffsets, avg: $averagedOffset")
+                                onSaveCalibration(averagedOffset)
+                                onNavigateBack()
+                            }
                         },
                         modifier = Modifier.weight(1f).tutorialTarget(3),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text(S.setHorizon)
+                        val label = if (calibrationOffsets.isEmpty()) {
+                            S.setHorizon
+                        } else {
+                            "${S.setHorizon} (${calibrationOffsets.size + 1}/$REQUIRED_SAMPLES)"
+                        }
+                        Text(label, maxLines = 1)
+                    }
+                }
+
+                // Reset button — visible when at least one sample is recorded
+                if (calibrationOffsets.isNotEmpty()) {
+                    TextButton(
+                        onClick = { calibrationOffsets.clear() }
+                    ) {
+                        Text("Reset", color = Color.Red)
                     }
                 }
             }
