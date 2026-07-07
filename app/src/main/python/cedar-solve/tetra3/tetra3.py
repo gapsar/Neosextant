@@ -1784,6 +1784,12 @@ class Tetra3():
             image_centroids = image_centroids[:verification_stars_per_fov, :]
             self._logger.debug('Trimmed %d match centroids to %d' % (num_centroids, len(image_centroids)))
             num_centroids = len(image_centroids)
+            # Filter pattern_centroids_inds to only include indices valid for
+            # the trimmed image_centroids array, otherwise indexing into
+            # image_centroids_vectors will go out of bounds.
+            pattern_centroids_inds = pattern_centroids_inds[
+                pattern_centroids_inds < num_centroids]
+            num_pattern_centroids = len(pattern_centroids_inds)
 
         if isinstance(distortion, (list, tuple)):
             self._logger.warning('Tuple distortion %s no longer supported, ignoring' % distortion)

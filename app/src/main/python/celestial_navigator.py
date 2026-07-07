@@ -72,12 +72,48 @@ threading.Thread(target=_setup_iers, daemon=True).start()
 
 T3_INSTANCE = None
 INITIALIZATION_ERROR = None
+USE_PER_IMAGE_SELF_CALIBRATION = False
+
+# EXIF orientation tag values -> PIL transpose operations (same mapping as
+# ImageOps.exif_transpose). Applied manually because exif_transpose also
+# re-serializes the EXIF block, which crashes on Pixel camera EXIF containing
+# rationals with a zero denominator (e.g. DigitalZoomRatio = 0/0):
+# ZeroDivisionError in PIL TiffImagePlugin.write_rational.
+_ORIENTATION_TRANSPOSES = {
+    2: Image.FLIP_LEFT_RIGHT,
+    3: Image.ROTATE_180,
+    4: Image.FLIP_TOP_BOTTOM,
+    5: Image.TRANSPOSE,
+    6: Image.ROTATE_270,
+    7: Image.TRANSVERSE,
+    8: Image.ROTATE_90,
+}
+
+
+def _apply_exif_orientation(img):
+    """Rotates/flips pixels per the EXIF orientation tag WITHOUT rewriting the
+    EXIF data (reading the tag is safe; re-serializing broken rationals is not).
+    The stale EXIF is dropped from the result so nothing downstream re-applies it.
+    """
+    try:
+        orientation = img.getexif().get(0x0112, 1)
+    except Exception:
+        orientation = 1
+    method = _ORIENTATION_TRANSPOSES.get(orientation)
+    if method is not None:
+        img = img.transpose(method)
+        img.info.pop('exif', None)
+    return img
 
 try:
     print("Python: Initializing Tetra3 Astrometry Solver...")
-    # 'load_database' should point to the location of your Tetra3 database file.
-    # 'default_database' assumes it's in the default location.
-    T3_INSTANCE = tetra3.Tetra3(load_database='smartphone_database_2.npz')
+    # Database generated from hip_main for the NATIVE camera geometry
+    # (Pixel 8a main lens, full-res 3024x4032 portrait captures):
+    # max_fov=48.6, star_max_magnitude=7.0, verification_stars_per_fov=30,
+    # pattern_max_error=0.005, epoch_proper_motion=2026.5.
+    # The effective solved FOV across the portrait width is ~45.7 deg
+    # (validated 40/40 on native captures, 2026-07-06).
+    T3_INSTANCE = tetra3.Tetra3(load_database='db_native_fov48.6.npz')
     if T3_INSTANCE.has_database:
         print("Python: Tetra3 Solver initialized successfully.")
     else:
@@ -87,6 +123,194 @@ try:
 except Exception as e_init:
     INITIALIZATION_ERROR = f"FATAL ERROR initializing Tetra3: {e_init}\n{traceback.format_exc()}"
     print(f"Python: {INITIALIZATION_ERROR}")
+
+# =============================================================================
+# HIP Star Name Lookup Table
+# Maps Hipparcos catalogue IDs to (common_name, IAU_constellation_abbreviation)
+# Covers the ~150 brightest / most recognizable navigational stars.
+# =============================================================================
+HIP_STAR_NAMES = {
+    # --- Canis Major (CMa) ---
+    32349: ("Sirius", "CMa"),
+    33579: ("Wezen", "CMa"),
+    34444: ("Aludra", "CMa"),
+    31592: ("Mirzam", "CMa"),
+    35904: ("Furud", "CMa"),
+    33856: ("Adhara", "CMa"),
+    # --- Orion (Ori) ---
+    27989: ("Betelgeuse", "Ori"),
+    24436: ("Rigel", "Ori"),
+    26311: ("Bellatrix", "Ori"),
+    26727: ("Mintaka", "Ori"),
+    25336: ("Alnilam", "Ori"),
+    25930: ("Alnitak", "Ori"),
+    22449: ("Saiph", "Ori"),
+    # --- Canis Minor (CMi) ---
+    37279: ("Procyon", "CMi"),
+    36188: ("Gomeisa", "CMi"),
+    # --- Taurus (Tau) ---
+    21421: ("Aldebaran", "Tau"),
+    25428: ("Elnath", "Tau"),
+    20889: ("Ain", "Tau"),
+    # --- Gemini (Gem) ---
+    36850: ("Castor", "Gem"),
+    37826: ("Pollux", "Gem"),
+    31681: ("Alhena", "Gem"),
+    35550: ("Mebsuta", "Gem"),
+    # --- Leo (Leo) ---
+    49669: ("Regulus", "Leo"),
+    57632: ("Denebola", "Leo"),
+    50583: ("Algieba", "Leo"),
+    54872: ("Zosma", "Leo"),
+    # --- Virgo (Vir) ---
+    65474: ("Spica", "Vir"),
+    63608: ("Vindemiatrix", "Vir"),
+    # --- Boötes (Boo) ---
+    69673: ("Arcturus", "Boo"),
+    67927: ("Izar", "Boo"),
+    # --- Scorpius (Sco) ---
+    80763: ("Antares", "Sco"),
+    78820: ("Dschubba", "Sco"),
+    84143: ("Shaula", "Sco"),
+    82396: ("Sargas", "Sco"),
+    86228: ("Lesath", "Sco"),
+    78265: ("Graffias", "Sco"),
+    # --- Lyra (Lyr) ---
+    91262: ("Vega", "Lyr"),
+    91971: ("Sheliak", "Lyr"),
+    92420: ("Sulafat", "Lyr"),
+    # --- Aquila (Aql) ---
+    97649: ("Altair", "Aql"),
+    97278: ("Tarazed", "Aql"),
+    # --- Cygnus (Cyg) ---
+    102098: ("Deneb", "Cyg"),
+    95947: ("Sadr", "Cyg"),
+    100453: ("Gienah Cygni", "Cyg"),
+    94779: ("Albireo", "Cyg"),
+    # --- Ursa Major (UMa) ---
+    54061: ("Alioth", "UMa"),
+    62956: ("Alkaid", "UMa"),
+    53910: ("Megrez", "UMa"),
+    58001: ("Mizar", "UMa"),
+    59774: ("Alcor", "UMa"),
+    48319: ("Phad", "UMa"),
+    46733: ("Merak", "UMa"),
+    50801: ("Dubhe", "UMa"),
+    # --- Ursa Minor (UMi) ---
+    11767: ("Polaris", "UMi"),
+    72607: ("Kochab", "UMi"),
+    75097: ("Pherkad", "UMi"),
+    # --- Cassiopeia (Cas) ---
+    3179: ("Schedar", "Cas"),
+    746: ("Caph", "Cas"),
+    4427: ("Tsih", "Cas"),
+    6686: ("Ruchbah", "Cas"),
+    # --- Centaurus (Cen) ---
+    71683: ("Alpha Centauri", "Cen"),
+    68702: ("Hadar", "Cen"),
+    71681: ("Toliman", "Cen"),
+    61932: ("Menkent", "Cen"),
+    # --- Crux (Cru) ---
+    60718: ("Acrux", "Cru"),
+    62434: ("Mimosa", "Cru"),
+    61084: ("Gacrux", "Cru"),
+    # --- Carina (Car) ---
+    30438: ("Canopus", "Car"),
+    45238: ("Avior", "Car"),
+    41037: ("Miaplacidus", "Car"),
+    # --- Eridanus (Eri) ---
+    7588: ("Achernar", "Eri"),
+    23875: ("Cursa", "Eri"),
+    # --- Piscis Austrinus (PsA) ---
+    113368: ("Fomalhaut", "PsA"),
+    # --- Perseus (Per) ---
+    15863: ("Mirfak", "Per"),
+    14576: ("Algol", "Per"),
+    # --- Auriga (Aur) ---
+    24608: ("Capella", "Aur"),
+    28360: ("Menkalinan", "Aur"),
+    # --- Sagittarius (Sgr) ---
+    90185: ("Kaus Australis", "Sgr"),
+    89931: ("Nunki", "Sgr"),
+    88635: ("Ascella", "Sgr"),
+    86414: ("Kaus Media", "Sgr"),
+    85927: ("Kaus Borealis", "Sgr"),
+    # --- Pegasus (Peg) ---
+    113963: ("Markab", "Peg"),
+    112158: ("Scheat", "Peg"),
+    1067: ("Algenib", "Peg"),
+    109410: ("Enif", "Peg"),
+    # --- Andromeda (And) ---
+    677: ("Alpheratz", "And"),
+    5447: ("Mirach", "And"),
+    9640: ("Almach", "And"),
+    # --- Aries (Ari) ---
+    9884: ("Hamal", "Ari"),
+    8903: ("Sheratan", "Ari"),
+    # --- Libra (Lib) ---
+    72622: ("Zubenelgenubi", "Lib"),
+    74785: ("Zubeneschamali", "Lib"),
+    # --- Corona Borealis (CrB) ---
+    76267: ("Alphecca", "CrB"),
+    # --- Capricornus (Cap) ---
+    100345: ("Algedi", "Cap"),
+    104139: ("Deneb Algedi", "Cap"),
+    # --- Aquarius (Aqr) ---
+    109074: ("Sadalsuud", "Aqr"),
+    106278: ("Sadalmelik", "Aqr"),
+    # --- Pisces (Psc) ---
+    7097: ("Alrescha", "Psc"),
+    # --- Ophiuchus (Oph) ---
+    86032: ("Rasalhague", "Oph"),
+    84012: ("Sabik", "Oph"),
+    # --- Hercules (Her) ---
+    84345: ("Rasalgethi", "Her"),
+    79593: ("Kornephoros", "Her"),
+    # --- Draco (Dra) ---
+    87833: ("Eltanin", "Dra"),
+    85670: ("Rastaban", "Dra"),
+    # --- Lupus (Lup) ---
+    70576: ("Men", "Lup"),
+    # --- Hydra (Hya) ---
+    46390: ("Alphard", "Hya"),
+    # --- Corvus (Crv) ---
+    59316: ("Gienah", "Crv"),
+    # --- Crater (Crt) ---
+    # --- Puppis (Pup) ---
+    39953: ("Naos", "Pup"),
+    # --- Vela (Vel) ---
+    44816: ("Suhail", "Vel"),
+    # --- Columba (Col) ---
+    25985: ("Phact", "Col"),
+    # --- Triangulum Australe (TrA) ---
+    82273: ("Atria", "TrA"),
+    # --- Pavo (Pav) ---
+    100751: ("Peacock", "Pav"),
+    # --- Grus (Gru) ---
+    109268: ("Alnair", "Gru"),
+    # --- Phoenix (Phe) ---
+    2081: ("Ankaa", "Phe"),
+    # --- Tucana (Tuc) ---
+    114996: ("Alpha Tucanae", "Tuc"),
+}
+
+# IAU Constellation full names from abbreviations
+CONSTELLATION_NAMES = {
+    "CMa": "Canis Major", "Ori": "Orion", "CMi": "Canis Minor",
+    "Tau": "Taurus", "Gem": "Gemini", "Leo": "Leo", "Vir": "Virgo",
+    "Boo": "Boötes", "Sco": "Scorpius", "Lyr": "Lyra", "Aql": "Aquila",
+    "Cyg": "Cygnus", "UMa": "Ursa Major", "UMi": "Ursa Minor",
+    "Cas": "Cassiopeia", "Cen": "Centaurus", "Cru": "Crux",
+    "Car": "Carina", "Eri": "Eridanus", "PsA": "Piscis Austrinus",
+    "Per": "Perseus", "Aur": "Auriga", "Sgr": "Sagittarius",
+    "Peg": "Pegasus", "And": "Andromeda", "Ari": "Aries",
+    "Lib": "Libra", "CrB": "Corona Borealis", "Cap": "Capricornus",
+    "Aqr": "Aquarius", "Psc": "Pisces", "Oph": "Ophiuchus",
+    "Her": "Hercules", "Dra": "Draco", "Lup": "Lupus",
+    "Hya": "Hydra", "Crv": "Corvus", "Pup": "Puppis",
+    "Vel": "Vela", "Col": "Columba", "TrA": "Triangulum Australe",
+    "Pav": "Pavo", "Gru": "Grus", "Phe": "Phoenix", "Tuc": "Tucana",
+}
 
 def detect_centroids_cli(image_path):
     """
@@ -113,8 +337,13 @@ def detect_centroids_cli(image_path):
             f"cedar_out_{os.path.basename(image_path)}.json"
         )
 
+        cmd = [
+            binary_path, "--input", image_path, "--output", output_path,
+            "--sigma", "4.713974740184074", "--binning", "2", "--hot-pixels", "true"
+        ]
+        print(f"Python: Running cedar_cli with args: {cmd}")
         result = subprocess.check_output(
-            [binary_path, "--input", image_path, "--output", output_path, "--sigma", "6.0", "--hot-pixels", "true"],
+            cmd,
             stderr=subprocess.STDOUT,
             timeout=30
         )
@@ -137,7 +366,7 @@ def detect_centroids_cli(image_path):
     except Exception as e:
         return {"error": str(e)}
 
-def image_processor(image_name, image_path):
+def image_processor(image_name, image_path, intrinsics_json_str="{}"):
     """
     Analyzes an image from a given file path to find celestial coordinates.
     This function replaces the mock function from the test script.
@@ -153,6 +382,7 @@ def image_processor(image_name, image_path):
     """
     print(f"Python: image_processor received image name: {image_name}")
     print(f"Python: image_processor received image path: {image_path}")
+    print(f"Python: image_processor received intrinsics: {intrinsics_json_str}")
 
     # --- Initial Checks ---
     if T3_INSTANCE is None:
@@ -166,9 +396,32 @@ def image_processor(image_name, image_path):
         return json.dumps({"solved": 0, "error_message": error_msg})
 
     # --- Main Processing Logic ---
+    rotated_cedar_input_path = None
     try:
         print(f"Python: Opening image: {image_path}...")
         with Image.open(image_path) as img:
+            # Step 2: Fix geometry by rotating landscape images to portrait.
+            # Apply the EXIF orientation tag (which the raw CameraX capture sets,
+            # since it stores pixels landscape with a rotation tag) so the pixel
+            # buffer we hand to cedar_cli agrees with the size we later declare
+            # to the solver. Fall back to the width>height heuristic only when
+            # there is no usable EXIF tag.
+            orig_size_before = (img.width, img.height)
+            img = _apply_exif_orientation(img)
+            if (img.width, img.height) == orig_size_before and img.width > img.height:
+                print(f"Python: No EXIF orientation; image is landscape ({img.width}x{img.height}), "
+                      f"rotating 90 deg to portrait.")
+                img = img.transpose(Image.ROTATE_90)
+
+            if (img.width, img.height) != orig_size_before:
+                print(f"Python: Rotated image to {img.width}x{img.height} to correct orientation.")
+                # The pixels cedar_cli reads must match the rotation we just applied
+                # in-memory, otherwise centroids end up in a different frame than the
+                # (orig_height, orig_width) we declare to the solver below. Persist the
+                # rotated image and point the CLI at that instead of the raw file.
+                rotated_cedar_input_path = image_path + ".rotated.jpg"
+                img.save(rotated_cedar_input_path, quality=95)
+
             orig_width, orig_height = img.width, img.height
             # H-12: Cap image resolution to avoid excessive memory usage
             MAX_DIM = 4000
@@ -185,8 +438,9 @@ def image_processor(image_name, image_path):
 
         centroids = []
 
-        print("Python: Extracting centroids using Cedar Detect CLI...")
-        cedar_result = detect_centroids_cli(image_path)
+        cedar_input_path = rotated_cedar_input_path or image_path
+        print(f"Python: Extracting centroids using Cedar Detect CLI on {cedar_input_path}...")
+        cedar_result = detect_centroids_cli(cedar_input_path)
 
         if "error" in cedar_result:
             print(f"Python: Cedar Detect CLI error: {cedar_result['error']}")
@@ -206,6 +460,8 @@ def image_processor(image_name, image_path):
                 # Let's verify: tetra3.get_centroids_from_image returns (y, x).
                 # So we need to swap x and y from Cedar result.
                 cedar_stars = cedar_result["stars"]
+                # Step 1b: Sort descending by brightness so we keep the real stars
+                cedar_stars.sort(key=lambda s: s.get("brightness", 0), reverse=True)
                 centroids = [(star["y"], star["x"]) for star in cedar_stars]
                 print(f"Python: Cedar Detect found {len(centroids)} centroids.")
             else:
@@ -218,48 +474,278 @@ def image_processor(image_name, image_path):
             print("Python: No centroids found in the image.")
             return json.dumps({"solved": 0, "error_message": "No stars (centroids) found in image."})
 
-        # Use the 30 brightest centroids for solving
+        # Use the 75 brightest centroids for solving
         # If we used Cedar, they might not be sorted by brightness.
         # If we used Tetra3, they are sorted.
-        # We can sort by brightness if we had it, but for now just taking first 30 is usually okay if Cedar returns them in order.
+        # We can sort by brightness if we had it, but for now just taking first 75 is usually okay if Cedar returns them in order.
         # Cedar CLI usually returns them sorted by brightness descending.
+        #
+        # Cap at the database's verification_stars_per_fov as well: upstream
+        # tetra3 computes pattern indices BEFORE trimming to that limit and
+        # then indexes out of bounds (see cedar-solve/LOCAL_PATCHES.md) —
+        # capping here keeps that code path from ever being entered.
+        max_centroids = 75
+        try:
+            vspf = T3_INSTANCE.database_properties.get('verification_stars_per_fov')
+            if vspf:
+                max_centroids = min(max_centroids, int(vspf))
+        except Exception:
+            pass
+        centroids = centroids[:max_centroids]
 
         # Convert to list of lists if it's not already compatible
         # Ensure elements are native Python floats, not np.float32, for JSON serialization
         centroids_list = [[float(c[0]), float(c[1])] for c in centroids]
 
-        trimmed_centroids = centroids_list[:30]
-        print(f"Python: Found {len(centroids)} centroids, using {len(trimmed_centroids)} for solving.")
+        print(f"Python: Found {len(centroids)} centroids, using {len(centroids_list)} for solving.")
 
-        # Solve for astrometry
+        # Parse intrinsics
+        try:
+            camera_info = json.loads(intrinsics_json_str)
+        except Exception:
+            camera_info = {}
+
+        # Step 0: Initial distortion estimate (Camera2 metadata)
+        cx, cy = orig_width / 2.0, orig_height / 2.0
+        fx, fy = cx, cy # Fallback
+        intr = camera_info.get("intrinsics")
+        if intr and len(intr) >= 5:
+            fx, fy, cx, cy, _ = intr
+            
+        dist = camera_info.get("distortion")
+        if dist is None:
+            dist = camera_info.get("radial_distortion")
+            
+        first_solve_centroids = []
+        # Step 3: Gate off Step 0 pre-correction
+        if False and dist and len(dist) >= 5:
+            k1_init, k2_init, k3_init, p1_init, p2_init = dist[:5]
+            for y, x in centroids_list:
+                nx = (x - cx) / fx
+                ny = (y - cy) / fy
+                r2 = nx*nx + ny*ny
+                r4 = r2*r2
+                r6 = r4*r2
+                radial = 1 + k1_init*r2 + k2_init*r4 + k3_init*r6
+                dx = nx * radial + 2*p1_init*nx*ny + p2_init*(r2 + 2*nx*nx)
+                dy = ny * radial + p1_init*(r2 + 2*ny*ny) + 2*p2_init*nx*ny
+                
+                corr_x = dx * fx + cx
+                corr_y = dy * fy + cy
+                first_solve_centroids.append([corr_y, corr_x])
+            print("Python: Pre-corrected centroids using Camera2 LENS_DISTORTION.")
+        else:
+            first_solve_centroids = list(centroids_list)
+
+        # Step 1: First (coarse) solve
+        # fov_estimate: effective horizontal (portrait-width) FOV of native
+        # full-res captures, measured against solve-field WCS ground truth;
+        # solved FOVs cluster at 45.69-45.80 deg.
         solution = T3_INSTANCE.solve_from_centroids(
-            trimmed_centroids,
+            first_solve_centroids,
             (orig_height, orig_width),
-            fov_estimate=53,
-            solve_timeout=10000  # 10-second timeout
+            fov_estimate=45.72,
+            fov_max_error=4,
+            pattern_checking_stars=6,
+            match_radius=0.006444159991699473,
+            match_threshold=0.0001838658337161896,
+            solve_timeout=10000,
+            return_matches=True
         )
 
-        print("Python: Tetra3 solving complete.")
+        print("Python: Tetra3 first solve complete.")
+        centroids_to_return = first_solve_centroids
+        
         if solution.get('RA') is not None:
+            if USE_PER_IMAGE_SELF_CALIBRATION:
+                # Step 2: Fit distortion from matches
+                matched_centroids_raw = solution.get('matched_centroids', [])
+                matched_stars_data = solution.get('matched_stars', [])
+                
+                ra_deg = solution.get('RA')
+                dec_deg = solution.get('Dec')
+                roll_deg = solution.get('Roll')
+                fov_deg = solution.get('FOV')
+                
+                # Reconstruct Rotation matrix R (ICRS to Camera)
+                ra_rad = np.radians(ra_deg)
+                dec_rad = np.radians(dec_deg)
+                roll_rad = np.radians(roll_deg)
+                
+                cos_ra, sin_ra = np.cos(ra_rad), np.sin(ra_rad)
+                cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
+                cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
+                
+                b = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
+                E = np.array([-sin_ra, cos_ra, 0.0])
+                N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
+                up = cos_roll * N + sin_roll * E
+                left = np.cross(up, b)
+                
+                R = np.array([b, left, up])
+                
+                # Calculate focal length in pixels using FOV
+                fit_fx = (orig_width / 2.0) / np.tan(np.radians(fov_deg) / 2.0)
+                fit_fy = fit_fx
+                fit_cx = orig_width / 2.0
+                fit_cy = orig_height / 2.0
+                
+                matched_uncorrected = []
+                expected_positions = []
+                
+                for i in range(len(matched_centroids_raw)):
+                    my_y, my_x = matched_centroids_raw[i]
+                    # Find closest in first_solve_centroids to get original
+                    dists = [(my_y - c[0])**2 + (my_x - c[1])**2 for c in first_solve_centroids]
+                    best_idx = np.argmin(dists)
+                    orig_y, orig_x = centroids_list[best_idx]
+                    matched_uncorrected.append((orig_y, orig_x))
+                    
+                    # Compute expected position
+                    s_ra = np.radians(matched_stars_data[i][0])
+                    s_dec = np.radians(matched_stars_data[i][1])
+                    s_v = np.array([np.cos(s_dec)*np.cos(s_ra), np.cos(s_dec)*np.sin(s_ra), np.sin(s_dec)])
+                    
+                    s_cam = R @ s_v
+                    vz = s_cam[0]
+                    vx = -s_cam[1]
+                    vy = -s_cam[2]
+                    
+                    x_exp = fit_fx * (vx / vz) + fit_cx
+                    y_exp = fit_fy * (vy / vz) + fit_cy
+                    expected_positions.append((y_exp, x_exp))
+                    
+                # Least squares for k1, k2
+                A = []
+                B = []
+                for i in range(len(matched_uncorrected)):
+                    y_meas, x_meas = matched_uncorrected[i]
+                    y_exp, x_exp = expected_positions[i]
+                    
+                    dx_p = x_exp - fit_cx
+                    dy_p = y_exp - fit_cy
+                    r = np.sqrt(dx_p*dx_p + dy_p*dy_p)
+                    r2 = r*r
+                    r4 = r2*r2
+                    
+                    A.append([dx_p * r2, dx_p * r4])
+                    B.append(x_meas - x_exp)
+                    
+                    A.append([dy_p * r2, dy_p * r4])
+                    B.append(y_meas - y_exp)
+                    
+                A = np.array(A)
+                B = np.array(B)
+                
+                num_matches = len(matched_uncorrected)
+                k1_fit, k2_fit = 0.0, 0.0
+                skip_second_solve = False
+                
+                if num_matches >= 8:
+                    res, residuals, _, _ = np.linalg.lstsq(A, B, rcond=None)
+                    k1_fit, k2_fit = res[0], res[1]
+                elif num_matches >= 4:
+                    A1 = A[:, 0:1]
+                    res, residuals, _, _ = np.linalg.lstsq(A1, B, rcond=None)
+                    k1_fit = res[0]
+                else:
+                    print("Python: Not enough matches for self-calibration, skipping second solve.")
+                    skip_second_solve = True
+                    
+                if not skip_second_solve:
+                    print(f"Python: Self-calibration fitted k1={k1_fit:e}, k2={k2_fit:e} from {num_matches} matches")
+                    
+                    # Step 3: Undistort all centroids and re-solve
+                    final_centroids = []
+                    for y, x in centroids_list:
+                        dx_p = x - fit_cx
+                        dy_p = y - fit_cy
+                        r = np.sqrt(dx_p*dx_p + dy_p*dy_p)
+                        scale = 1 + k1_fit*(r**2) + k2_fit*(r**4)
+                        x_corr = fit_cx + dx_p / scale
+                        y_corr = fit_cy + dy_p / scale
+                        final_centroids.append([y_corr, x_corr])
+                        
+                    centroids_to_return = final_centroids
+                    
+                    # Pass distortion=None to disable tetra3's internal single-parameter distortion
+                    solution2 = T3_INSTANCE.solve_from_centroids(
+                        final_centroids,
+                        (orig_height, orig_width),
+                        fov_estimate=fov_deg,
+                        solve_timeout=10000,
+                        return_matches=True,
+                        distortion=None
+                    )
+                    
+                    if solution2.get('RA') is not None:
+                        print("Python: Second (refined) solve successful.")
+                        solution = solution2
+                    else:
+                        print("Python: Second solve failed, falling back to first solve.")
+                        centroids_to_return = first_solve_centroids
+
+            # Build matched star info with names from HIP lookup
+            matched_star_list = []
+            matched_centroids_raw = solution.get('matched_centroids', [])
+            matched_cat_ids = solution.get('matched_catID', [])
+            matched_stars_data = solution.get('matched_stars', [])
+
+            if matched_centroids_raw and matched_cat_ids:
+                for idx in range(len(matched_centroids_raw)):
+                    centroid = matched_centroids_raw[idx]
+                    cat_id = matched_cat_ids[idx] if idx < len(matched_cat_ids) else None
+                    star_data = matched_stars_data[idx] if idx < len(matched_stars_data) else None
+
+                    if cat_id is not None:
+                        if isinstance(cat_id, (list, tuple, np.ndarray)):
+                            hip_id = int(cat_id[0]) if len(cat_id) > 0 else -1
+                        else:
+                            hip_id = int(cat_id)
+                    else:
+                        hip_id = -1
+                    name_info = HIP_STAR_NAMES.get(hip_id)
+                    star_name = name_info[0] if name_info else None
+                    constellation = name_info[1] if name_info else None
+                    magnitude = float(star_data[2]) if star_data and len(star_data) > 2 else None
+
+                    matched_star_list.append({
+                        "name": star_name,
+                        "constellation": constellation,
+                        "hip_id": hip_id,
+                        "y": float(centroid[0]),
+                        "x": float(centroid[1]),
+                        "magnitude": magnitude
+                    })
+
+                print(f"Python: Matched {len(matched_star_list)} stars, {sum(1 for s in matched_star_list if s['name'])} named.")
+
             final_result = {
                 "solved": 1,
                 "ra_deg": solution.get('RA'),
                 "dec_deg": solution.get('Dec'),
                 "roll_deg": solution.get('Roll'),
                 "fov_deg": solution.get('FOV'),
-                "centroids": trimmed_centroids,
+                "centroids": centroids_to_return,
+                "matched_stars": matched_star_list,
                 "error_message": None
             }
             print(f"Python: Solution FOUND: RA={final_result['ra_deg']:.4f}, Dec={final_result['dec_deg']:.4f}")
             return json.dumps(final_result)
         else:
             print(f"Python: Solution NOT found. Status: {solution.get('status', 'Unknown')}")
-            return json.dumps({"solved": 0, "centroids": trimmed_centroids, "error_message": f"No match found. Tetra3 status: {solution.get('status')}"})
+            return json.dumps({"solved": 0, "centroids": centroids_to_return, "error_message": f"No match found. Tetra3 status: {solution.get('status')}"})
 
     except Exception as e:
         error_msg = f"An exception occurred in image_processor: {e}"
         print(f"Python: {error_msg}\n{traceback.format_exc()}")
         return json.dumps({"solved": 0, "error_message": error_msg})
+    finally:
+        if rotated_cedar_input_path:
+            try:
+                os.remove(rotated_cedar_input_path)
+            except OSError:
+                pass
 
 
 # =============================================================================
@@ -650,24 +1136,24 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
         #
         # tetra3's camera frame axes (derived from _compute_vectors in tetra3.py):
         #   Axis 0 = boresight (into sky)
-        #   Axis 1 = "left" in stored image
-        #   Axis 2 = "up" in stored image
+        #   Axis 1 = "left" in solved image
+        #   Axis 2 = "up" in solved image
         #
-        # The stored image is ALWAYS in the camera sensor's native pixel
-        # orientation (landscape). EXIF orientation only affects display
-        # rotation, not the pixel data tetra3 processes. So the mapping from
-        # sensor axes to tetra3's camera frame is FIXED regardless of EXIF:
-        #
-        # On standard Android phones (sensorOrientation=90°, back camera):
+        # image_processor rotates the stored landscape pixels 90° CW (per the
+        # EXIF orientation tag) into the PORTRAIT frame before solving, so the
+        # solved image's axes map to phone axes as:
         #   Boresight (axis 0) = -Z_sensor  (camera looks through back of phone)
-        #   Left in stored image (axis 1) = +Y_sensor  (toward top of phone)
-        #   Up in stored image (axis 2)   = +X_sensor  (toward right of phone... wait)
+        #   Left in solved image (axis 1) = -X_sensor  (toward left of phone)
+        #   Up in solved image (axis 2)   = +Y_sensor  (toward top of phone)
         #
-        # Verified empirically: v_cam = [-gz, gy, gx] produces correct results.
+        # Hence v_cam = [-gz, -gx, gy]. (The pre-rotation landscape mapping was
+        # [-gz, gy, gx]; using it with portrait solves shifts roll by 90° and
+        # throws fixes off by thousands of km. Validated synthetically:
+        # portrait mapping recovers a known observer position exactly.)
 
         print(f"Python: 1-Shot: sensor g=({gx:.4f}, {gy:.4f}, {gz:.4f})")
 
-        v_cam = np.array([-float(gz), float(gy), float(gx)])
+        v_cam = np.array([-float(gz), -float(gx), float(gy)])
 
         # Normalize
         v_norm = np_norm(v_cam)
@@ -709,6 +1195,164 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
         error_msg = f"Error in solve_oneshot: {e}"
         print(f"Python: {error_msg}\n{traceback.format_exc()}")
         return json.dumps({"error": error_msg})
+
+def _solve_obs_group(obs_group, label):
+    """
+    Solves each observation of a group independently via solve_oneshot.
+    Returns (lats, lons) of the successful fixes; failures are logged.
+    """
+    lats = []
+    lons = []
+    for i, obs in enumerate(obs_group):
+        result_json = solve_oneshot(
+            obs['ra'], obs['dec'], obs['roll'],
+            obs['gx'], obs['gy'], obs['gz'],
+            obs['time_iso'],
+            ""  # image_path not needed for solve
+        )
+        result = json.loads(result_json)
+
+        if 'error' not in result or result.get('error') is None:
+            lats.append(result['fixed_latitude'])
+            lons.append(result['fixed_longitude'])
+            print(f"Python: {label} fix {i+1}/{len(obs_group)}: Lat={result['fixed_latitude']:.4f}, Lon={result['fixed_longitude']:.4f}")
+        else:
+            print(f"Python: {label} fix {i+1}/{len(obs_group)} FAILED: {result['error']}")
+    return lats, lons
+
+
+def _median_fix(lats, lons):
+    """
+    Component-wise median of fixes (robust to outliers) plus a MAD-based
+    spread estimate converted to nautical miles.
+    Returns (median_lat, median_lon, spread_nm). For a single fix the
+    median is the fix itself and the spread is 0.
+    """
+    median_lat = float(np.median(lats))
+    median_lon = float(np.median(lons))
+    lat_mad = float(np.median(np.abs(np.array(lats) - median_lat))) * 60.0  # deg to NM
+    lon_mad = float(np.median(np.abs(np.array(lons) - median_lon))) * 60.0 * abs(np.cos(np.radians(median_lat)))
+    spread_nm = float(np.sqrt(lat_mad**2 + lon_mad**2))
+    return median_lat, median_lon, spread_nm
+
+
+def solve_oneshot_multi(obs_list_json):
+    """
+    Multi-shot 1-Shot solver: solves each observation independently
+    and returns the component-wise median position.
+
+    This is dramatically more accurate than a single fix because the median
+    is robust to outliers (bad plate-solve roll, sensor glitch, etc.).
+
+    obs_list_json: JSON string of list of dicts:
+       [{'ra':, 'dec':, 'roll':, 'gx':, 'gy':, 'gz':, 'time_iso':}, ...]
+
+    Returns JSON with: fixed_latitude, fixed_longitude, error_estimate_nm, num_fixes
+    On error: returns JSON with 'error' key.
+    """
+    try:
+        obs_list = json.loads(obs_list_json)
+
+        lats, lons = _solve_obs_group(obs_list, "Multi-shot")
+
+        if len(lats) == 0:
+            return json.dumps({"error": "No valid fixes from any observation"})
+
+        median_lat, median_lon, spread_nm = _median_fix(lats, lons)
+
+        print(f"Python: Multi-shot MEDIAN from {len(lats)} fixes: Lat={median_lat:.4f}, Lon={median_lon:.4f}, spread={spread_nm:.2f} NM")
+
+        return json.dumps({
+            "fixed_latitude": median_lat,
+            "fixed_longitude": median_lon,
+            "error_estimate_nm": spread_nm,
+            "final_shift_nm": spread_nm,
+            "num_fixes": len(lats),
+            "individual_fixes": [{"lat": la, "lon": lo} for la, lo in zip(lats, lons)]
+        })
+
+    except Exception as e:
+        error_msg = f"Error in solve_oneshot_multi: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
+
+
+def solve_oneshot_burst_multi(burst_groups_json):
+    """
+    Two-level median solver for burst capture mode.
+
+    Level 1 (intra-burst): For each burst group (typically 7 images captured
+    in ~1.5s), solve each observation independently and take the component-wise
+    median to produce one noise-reduced fix per slot.
+
+    Level 2 (inter-slot): Median across all slots' burst-median fixes to
+    produce the final position.
+
+    burst_groups_json: JSON string of array of arrays:
+       [[{obs1}, {obs2}, ...], [{obs1}, {obs2}, ...], ...]
+       Each inner array is a burst group. Each obs has:
+       {'ra':, 'dec':, 'roll':, 'gx':, 'gy':, 'gz':, 'time_iso':}
+
+    Returns JSON with: fixed_latitude, fixed_longitude, error_estimate_nm,
+                        num_slots, burst_details
+    """
+    try:
+        burst_groups = json.loads(burst_groups_json)
+
+        slot_lats = []
+        slot_lons = []
+        burst_details = []
+
+        for slot_idx, burst_group in enumerate(burst_groups):
+            # Level 1: Solve each observation in this burst independently
+            lats, lons = _solve_obs_group(burst_group, f"Burst slot {slot_idx+1}")
+
+            if len(lats) == 0:
+                print(f"Python: Burst slot {slot_idx+1}: No valid fixes from any burst image")
+                burst_details.append({"slot": slot_idx + 1, "valid_fixes": 0, "error": "No valid fixes"})
+                continue
+
+            # Intra-burst median, with spread for diagnostics
+            burst_median_lat, burst_median_lon, burst_spread = _median_fix(lats, lons)
+
+            slot_lats.append(burst_median_lat)
+            slot_lons.append(burst_median_lon)
+
+            print(f"Python: Burst slot {slot_idx+1}: median from {len(lats)} fixes: "
+                  f"Lat={burst_median_lat:.4f}, Lon={burst_median_lon:.4f}, spread={burst_spread:.2f} NM")
+
+            burst_details.append({
+                "slot": slot_idx + 1,
+                "valid_fixes": len(lats),
+                "median_lat": burst_median_lat,
+                "median_lon": burst_median_lon,
+                "intra_burst_spread_nm": burst_spread
+            })
+
+        if len(slot_lats) == 0:
+            return json.dumps({"error": "No valid fixes from any burst slot"})
+
+        # Level 2: Inter-slot median
+        final_lat, final_lon, total_spread = _median_fix(slot_lats, slot_lons)
+
+        print(f"Python: Burst-multi FINAL from {len(slot_lats)} slots: "
+              f"Lat={final_lat:.4f}, Lon={final_lon:.4f}, spread={total_spread:.2f} NM")
+
+        return json.dumps({
+            "fixed_latitude": final_lat,
+            "fixed_longitude": final_lon,
+            "error_estimate_nm": total_spread,
+            "final_shift_nm": total_spread,
+            "num_slots": len(slot_lats),
+            "burst_details": burst_details,
+            "individual_fixes": [{"lat": la, "lon": lo} for la, lo in zip(slot_lats, slot_lons)]
+        })
+
+    except Exception as e:
+        error_msg = f"Error in solve_oneshot_burst_multi: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
+
 
 # --- Refactored Core Logic for Iteration ---
 
@@ -828,3 +1472,200 @@ def solve_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.0, p
         error_msg = f"Error in solve_iterative: {e}"
         print(f"Python: {error_msg}\n{traceback.format_exc()}")
         return json.dumps({"error": error_msg})
+
+
+def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lon_deg, time_iso):
+    """
+    Computes pitch_offset and roll_offset (in degrees) that align the measured gravity
+    vector (gx, gy, gz) in the sensor frame with the expected gravity vector computed
+    from the true latitude/longitude, time, and image orientation.
+    """
+    try:
+        import numpy as np
+        from astropy.time import Time
+
+        # 1. Expected Zenith in ICRS
+        t = Time(time_iso)
+        era_deg = t.earth_rotation_angle('tio').deg
+        lst_deg = (lon_deg + era_deg) % 360
+
+        lat_rad = np.radians(lat_deg)
+        lst_rad = np.radians(lst_deg)
+        zenith_icrs = np.array([
+            np.cos(lat_rad) * np.cos(lst_rad),
+            np.cos(lat_rad) * np.sin(lst_rad),
+            np.sin(lat_rad)
+        ])
+
+        # 2. Camera rotation matrix R (ICRS -> camera)
+        ra_rad = np.radians(float(ra_deg))
+        dec_rad = np.radians(float(dec_deg))
+        roll_rad = np.radians(float(roll_deg))
+
+        cos_ra, sin_ra = np.cos(ra_rad), np.sin(ra_rad)
+        cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
+        cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
+
+        b = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
+        E = np.array([-sin_ra, cos_ra, 0.0])
+        N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
+
+        row1 = cos_roll * E + sin_roll * N
+        row2 = -sin_roll * E + cos_roll * N
+        R = np.array([b, row1, row2])
+
+        # 3. Expected Zenith in camera frame
+        v_cam_exp = R @ zenith_icrs
+
+        # 4. Expected gravity in sensor frame
+        # v_cam = [-gz, -gx, gy] (portrait solve frame; must match solve_oneshot)
+        # So expected gravity in sensor:
+        gx_exp = -v_cam_exp[1]
+        gy_exp = v_cam_exp[2]
+        gz_exp = -v_cam_exp[0]
+        v_exp = np.array([gx_exp, gy_exp, gz_exp])
+
+        # Normalize expected vector
+        v_exp_norm = np.linalg.norm(v_exp)
+        if v_exp_norm > 1e-6:
+            v_exp = v_exp / v_exp_norm
+
+        # Measured gravity in sensor frame
+        v_meas = np.array([float(gx), float(gy), float(gz)])
+        v_meas_norm = np.linalg.norm(v_meas)
+        if v_meas_norm > 1e-6:
+            v_meas = v_meas / v_meas_norm
+
+        # 5. Solve for roll_offset and pitch_offset analytically
+        xm, ym, zm = v_meas
+        xe, ye, ze = v_exp
+
+        r_xy = np.sqrt(xm**2 + ym**2)
+        phi = np.arctan2(ym, xm)
+
+        candidates = []
+        if r_xy > 1e-6:
+            val = np.clip(xe / r_xy, -1.0, 1.0)
+            alpha = np.arccos(val)
+            for sign in [-1.0, 1.0]:
+                theta_r = phi + sign * alpha
+
+                # Compute y'
+                yp = -xm * np.sin(theta_r) + ym * np.cos(theta_r)
+
+                # Solve for theta_p
+                denom = yp**2 + zm**2
+                if denom > 1e-6:
+                    cos_p = (yp * ye + zm * ze) / denom
+                    sin_p = (-zm * ye + yp * ze) / denom
+                    theta_p = np.arctan2(sin_p, cos_p)
+
+                    # Verify
+                    # Z-rotation:
+                    xr = xm * np.cos(theta_r) + ym * np.sin(theta_r)
+                    yr = -xm * np.sin(theta_r) + ym * np.cos(theta_r)
+                    zr = zm
+                    # X-rotation:
+                    x_final = xr
+                    y_final = yr * np.cos(theta_p) - zr * np.sin(theta_p)
+                    z_final = yr * np.sin(theta_p) + zr * np.cos(theta_p)
+
+                    v_final = np.array([x_final, y_final, z_final])
+                    err = np.linalg.norm(v_final - v_exp)
+                    candidates.append((err, np.degrees(theta_p), np.degrees(theta_r)))
+
+        if not candidates:
+            return json.dumps({"error": "Failed to solve calibration rotation"})
+
+        # Pick candidate with smallest error
+        candidates.sort()
+        best_err, best_pitch_deg, best_roll_deg = candidates[0]
+
+        if best_err > 0.15:
+            return json.dumps({"error": f"Calibration solution has high error: {best_err:.4f}"})
+
+        return json.dumps({
+            "pitch_offset_deg": float(best_pitch_deg),
+            "roll_offset_deg": float(best_roll_deg),
+            "error": None
+        })
+
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in solve_calibration_offsets: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
+
+
+# =============================================================================
+# SECTION 5: SENSOR WAVE MODELING
+# =============================================================================
+
+def build_wave_model(json_data_str):
+    """
+    Analyzes 30s of gravity vectors to separate the true gravity (DC)
+    from the wave motion (AC).
+    Input: JSON string of list of [x, y, z] lists.
+    Returns: JSON string with true gravity and wave stats.
+    """
+    try:
+        import json
+        import numpy as np
+        
+        data = json.loads(json_data_str)
+        if not data or len(data) < 10:
+            return json.dumps({"success": False, "error": "Insufficient data"})
+            
+        arr = np.array(data) # shape (N, 3)
+        
+        # 1. True gravity is the arithmetic mean
+        true_g = np.mean(arr, axis=0)
+        norm = np.linalg.norm(true_g)
+        if norm > 0:
+            true_g = true_g / norm
+            
+        # 2. Extract Wave Properties via residuals
+        # Analyze the angle variation from the mean true gravity vector.
+        dots = np.dot(arr, true_g)
+        # Normalize the arr rows to avoid domain errors in arccos if vectors aren't perfectly unit length
+        norms = np.linalg.norm(arr, axis=1)
+        dots = dots / (norms + 1e-9)
+        dots = np.clip(dots, -1.0, 1.0)
+        angles = np.arccos(dots) # angle in radians
+        
+        mean_angle = np.mean(angles)
+        residuals = angles - mean_angle
+        
+        # Max amplitude in degrees
+        max_amplitude_deg = float(np.max(np.abs(residuals)) * (180.0 / np.pi))
+        
+        # FFT to find dominant period
+        # Assume sample rate is roughly constant. N samples over 30 seconds.
+        N = len(arr)
+        dt = 30.0 / N
+        
+        fft_vals = np.fft.rfft(residuals)
+        fft_mag = np.abs(fft_vals)
+        freqs = np.fft.rfftfreq(N, d=dt)
+        
+        # Find peak frequency (ignore DC at index 0 and ultra-low frequencies)
+        fft_mag[freqs < 0.05] = 0 # Ignore periods > 20s as likely drift, not ocean waves
+        if np.max(fft_mag) > 0:
+            peak_idx = np.argmax(fft_mag)
+            peak_freq = freqs[peak_idx]
+            period = 1.0 / peak_freq if peak_freq > 0 else 0.0
+        else:
+            period = 0.0
+            
+        result = {
+            "success": True,
+            "true_gravity": [float(true_g[0]), float(true_g[1]), float(true_g[2])],
+            "wave_amplitude_deg": round(max_amplitude_deg, 2),
+            "wave_period_sec": round(float(period), 1)
+        }
+        return json.dumps(result)
+        
+    except Exception as e:
+        import traceback
+        return json.dumps({"success": False, "error": str(e), "trace": traceback.format_exc()})
+
