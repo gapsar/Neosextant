@@ -41,19 +41,22 @@ fun SettingsScreen(
     onSolverModeChange: (SolverMode) -> Unit,
     onNavigateBack: () -> Unit,
     onNavigateToCalibration: () -> Unit,
+    onNavigateToDebugSensors: () -> Unit,
     onNavigateToHistory: () -> Unit,
     onReplayTutorial: () -> Unit,
     onLocaleChange: (AppLocale) -> Unit,
     isRedTintMode: Boolean,
     onRedTintModeChange: (Boolean) -> Unit,
     onResetSensorCal: () -> Unit,
-    onResetHorizon: () -> Unit
+    onResetHorizon: () -> Unit,
+    onResetOneshot: () -> Unit
 ) {
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showSystemParamsDialog by remember { mutableStateOf(false) }
     var showSolverModeHelpDialog by remember { mutableStateOf(false) }
     var showResetSensorDialog by remember { mutableStateOf(false) }
     var showResetHorizonDialog by remember { mutableStateOf(false) }
+    var showResetOneshotDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -90,8 +93,14 @@ fun SettingsScreen(
                 OutlinedButton(onClick = { showResetSensorDialog = true }, modifier = Modifier.weight(1f)) {
                     Text(S.resetSensorCal)
                 }
-                OutlinedButton(onClick = { showResetHorizonDialog = true }, modifier = Modifier.weight(1f)) {
-                    Text(S.resetHorizon)
+                if (solverMode == SolverMode.ONE_SHOT) {
+                    OutlinedButton(onClick = { showResetOneshotDialog = true }, modifier = Modifier.weight(1f)) {
+                        Text(S.resetOneshot)
+                    }
+                } else {
+                    OutlinedButton(onClick = { showResetHorizonDialog = true }, modifier = Modifier.weight(1f)) {
+                        Text(S.resetHorizon)
+                    }
                 }
             }
 
@@ -107,6 +116,19 @@ fun SettingsScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
             ) {
                 Text(S.systemParameters)
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = onNavigateToDebugSensors,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            ) {
+                Text("Sensor Debug Page")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -364,6 +386,27 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showResetHorizonDialog = false }) { Text(S.cancel) }
+            }
+        )
+    }
+
+    if (showResetOneshotDialog) {
+        val dialogModifier = if (isRedTintMode) {
+            Modifier.graphicsLayer { colorFilter = ColorFilter.colorMatrix(RedTintMatrix) }
+        } else Modifier
+        AlertDialog(
+            modifier = dialogModifier,
+            onDismissRequest = { showResetOneshotDialog = false },
+            title = { Text(S.resetConfirmTitle) },
+            text = { Text(S.resetConfirmText) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onResetOneshot()
+                    showResetOneshotDialog = false
+                }) { Text(S.confirm) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetOneshotDialog = false }) { Text(S.cancel) }
             }
         )
     }

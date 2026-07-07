@@ -104,8 +104,14 @@ object S {
     val stepSolver: String @Composable get() = s(
         "SOLVER MODE", "MODE DE RÉSOLUTION", "MODO DE RESOLUCIÓN"
     )
+    val stepCalOverview: String @Composable get() = s(
+        "CALIBRATION — OVERVIEW", "CALIBRATION — APERÇU", "CALIBRACIÓN — RESUMEN"
+    )
     val stepCalHorizon: String @Composable get() = s(
         "CALIBRATION — HORIZON", "CALIBRATION — HORIZON", "CALIBRACIÓN — HORIZONTE"
+    )
+    val stepCalStar: String @Composable get() = s(
+        "CALIBRATION — 1-SHOT (STAR)", "CALIBRATION — 1-SHOT (ÉTOILE)", "CALIBRACIÓN — 1-SHOT (ESTRELLA)"
     )
     val stepCalSensors: String @Composable get() = s(
         "CALIBRATION — SENSORS", "CALIBRATION — CAPTEURS", "CALIBRACIÓN — SENSORES"
@@ -136,23 +142,25 @@ object S {
         "Ici, vous choisissez le mode de résolution. « Itératif » triangule votre position à partir de plusieurs images. « LOP » trace des droites de hauteur classiques (nécessite une position estimée). Le nouveau mode « 1-Shot » calcule une position instantanée depuis une seule image grâce au vecteur gravité.",
         "Aquí, eliges el modo de resolución. 'Iterativo' triangula tu posición desde varias imágenes. 'LOP' traza líneas de posición clásicas (requiere posición estimada). El nuevo modo '1-Shot' calcula una posición instantánea desde una sola imagen usando el vector gravedad."
     )
+    val narrationCalOverview: String @Composable get() = s(
+        "Calibration is essential for accurate positioning. Your phone's accelerometer has manufacturing biases, and there is always a small misalignment between the camera lens and the sensor chip. Without calibration, your altitude measurements can be off by several degrees — which translates to errors of hundreds of nautical miles!\n\nThere are 3 types of calibration, each correcting a different source of error. Let's go through them.",
+        "La calibration est essentielle pour un positionnement précis. L'accéléromètre de votre téléphone présente des biais de fabrication, et il y a toujours un léger décalage entre l'objectif de la caméra et le capteur. Sans calibration, vos mesures d'altitude peuvent dévier de plusieurs degrés — soit des erreurs de centaines de milles nautiques !\n\nIl existe 3 types de calibration, chacun corrigeant une source d'erreur différente. Passons-les en revue.",
+        "La calibración es esencial para un posicionamiento preciso. El acelerómetro de tu teléfono tiene sesgos de fabricación, y siempre hay una pequeña desalineación entre el lente de la cámara y el chip sensor. Sin calibración, tus mediciones de altitud pueden desviarse varios grados — ¡lo que se traduce en errores de cientos de millas náuticas!\n\nHay 3 tipos de calibración, cada uno corrigiendo una fuente de error diferente. Repasémoslos."
+    )
     val narrationCalHorizon: String @Composable get() = s(
-        "Let's move on to the calibration window! Let's start with the simplest: the horizon calibration. This reduces the alignment error between the camera and the phone's accelerometer. Simply enter the height at which your phone is located (relative to sea level), align the horizon with the red line, then click on 'Set Horizon'.",
-        "Passons à la fenêtre de calibration ! Commençons par la plus simple : la calibration de l’horizon. " +
-                "Celle-ci réduit l’erreur d’alignement entre la caméra et l’accéléromètre du téléphone. " +
-                "Entrez simplement la hauteur à laquelle votre téléphone est situé (par rapport au niveau de la mer), alignez l’horizon avec la ligne rouge, puis cliquez sur « Définir l’horizon ».",
-        "¡Pasemos a la ventana de calibración! Comencemos por la más simple: la calibración del horizonte. " +
-                "Esta reduce el error de alineación entre la cámara y el acelerómetro del teléfono. " +
-                "Simplemente ingresa la altura a la que se encuentra tu teléfono (con respecto al nivel del mar), alinea el horizonte con la línea roja y luego haz clic en 'Definir horizonte'."
+        "Horizon Calibration (Iterative & LOP modes)\n\nThis corrects the angular offset between your camera and the accelerometer. Point your phone at the sea horizon, enter your height of eye (meters above sea level), and press 'Set Horizon'. The app applies a dip correction (≈1.76' × √height) and records the difference as your pitch offset.\n\nYou will need to repeat this 3 times for a multi-sample average, improving reliability. The final averaged offset is saved and applied to all future measurements.",
+        "Calibration de l'Horizon (modes Itératif & LOP)\n\nCeci corrige le décalage angulaire entre votre caméra et l'accéléromètre. Pointez votre téléphone vers l'horizon marin, entrez votre hauteur de l'œil (mètres au-dessus du niveau de la mer), puis appuyez sur « Définir l'horizon ». L'application applique une correction de dépression (≈1.76' × √hauteur) et enregistre la différence comme décalage de tangage.\n\nVous devrez répéter cette opération 3 fois pour obtenir une moyenne multi-échantillons, améliorant la fiabilité. Le décalage moyen final est sauvegardé et appliqué à toutes les mesures futures.",
+        "Calibración del Horizonte (modos Iterativo & LOP)\n\nEsto corrige el desfase angular entre tu cámara y el acelerómetro. Apunta tu teléfono al horizonte marino, ingresa tu altura del ojo (metros sobre el nivel del mar) y presiona 'Definir horizonte'. La app aplica una corrección de depresión (≈1.76' × √altura) y registra la diferencia como desfase de inclinación.\n\nDeberás repetir esto 3 veces para un promedio multi-muestra, mejorando la fiabilidad. El desfase promedio final se guarda y aplica a todas las mediciones futuras."
+    )
+    val narrationCalStar: String @Composable get() = s(
+        "Star Calibration (1-Shot mode)\n\nIn 1-Shot mode, the calibration screen changes completely. Instead of using the horizon, you calibrate using the stars themselves from a known position.\n\nYou must know your exact coordinates (from a nautical chart, a landmark, or a previous GPS fix). Enter them, point your phone at the night sky on a tripod, and press 'Calibrate'. The app plate-solves the star field and compares the camera orientation with the gravity vector to compute precise pitch and roll offsets.\n\nThis is the most accurate calibration method but requires a known position.",
+        "Calibration par Étoile (mode 1-Shot)\n\nEn mode 1-Shot, l'écran de calibration change complètement. Au lieu d'utiliser l'horizon, vous calibrez à l'aide des étoiles elles-mêmes depuis une position connue.\n\nVous devez connaître vos coordonnées exactes (à partir d'une carte marine, d'un repère ou d'un relevé GPS précédent). Entrez-les, pointez votre téléphone vers le ciel étoilé sur un trépied, puis appuyez sur « Calibrer ». L'app résout le champ stellaire et compare l'orientation de la caméra avec le vecteur gravité pour calculer les décalages précis de tangage et de roulis.\n\nC'est la méthode de calibration la plus précise, mais elle nécessite une position connue.",
+        "Calibración por Estrellas (modo 1-Shot)\n\nEn modo 1-Shot, la pantalla de calibración cambia completamente. En lugar de usar el horizonte, calibras usando las propias estrellas desde una posición conocida.\n\nDebes conocer tus coordenadas exactas (de una carta náutica, un punto de referencia o una posición GPS anterior). Ingrésalas, apunta tu teléfono al cielo nocturno en un trípode y presiona 'Calibrar'. La app resuelve el campo estelar y compara la orientación de la cámara con el vector de gravedad para calcular desfases precisos de inclinación y balanceo.\n\nEste es el método de calibración más preciso, pero requiere una posición conocida."
     )
     val narrationCalSensors: String @Composable get() = s(
-        "The second calibration is specific to the phone's sensors — it is the elliptical regression. Click on 'Calibrate Sensors', then follow the instructions. Place your phone on each of the faces presented and hold it stable. It will vibrate when a measurement is recorded to indicate you should change faces.",
-        "La seconde calibration est propre aux capteurs du téléphone — il s’agit de la régression elliptique. " +
-                "Cliquez sur « Calibrer les capteurs », puis suivez les instructions. Placez votre téléphone sur chacune des faces présentées " +
-                "et maintenez-le stable. Il vibrera lorsqu’une mesure sera enregistrée pour vous indiquer de changer de face.",
-        "La segunda calibración es propia de los sensores del teléfono — se trata de la regresión elíptica. " +
-                "Haz clic en 'Calibrar los sensores', luego sigue las instrucciones. Coloca tu teléfono en cada una de las caras presentadas " +
-                "y mantenlo estable. Vibrará cuando se registre una medición para indicarte que cambies de cara."
+        "Sensor Calibration (All modes)\n\nThis is the sphere-fit (elliptical regression) calibration. Every accelerometer has axis-specific biases — readings form an ellipsoid instead of a perfect sphere. This procedure measures gravity in 8 different orientations of your phone to fit an ellipsoid model and compute correction factors.\n\nClick 'Calibrate Sensors', then place your phone in each orientation as instructed. Hold it perfectly still — it will vibrate when a measurement is captured, signaling you to move to the next position. This calibration is important for ALL modes and should be done periodically (every ~10 days).",
+        "Calibration des Capteurs (Tous les modes)\n\nC'est la calibration par ajustement sphérique (régression elliptique). Chaque accéléromètre a des biais spécifiques aux axes — les lectures forment un ellipsoïde au lieu d'une sphère parfaite. Cette procédure mesure la gravité sur 8 orientations de votre téléphone pour ajuster un modèle ellipsoïdal et calculer des facteurs de correction.\n\nCliquez sur « Calibrer les capteurs », puis placez votre téléphone dans chaque orientation comme indiqué. Maintenez-le parfaitement immobile — il vibrera lorsqu'une mesure sera capturée, vous indiquant de passer à la position suivante. Cette calibration est importante pour TOUS les modes et doit être faite périodiquement (environ tous les 10 jours).",
+        "Calibración de Sensores (Todos los modos)\n\nEsta es la calibración por ajuste esférico (regresión elíptica). Cada acelerómetro tiene sesgos específicos por eje — las lecturas forman un elipsoide en lugar de una esfera perfecta. Este procedimiento mide la gravedad en 8 orientaciones de tu teléfono para ajustar un modelo elipsoidal y calcular factores de corrección.\n\nHaz clic en 'Calibrar los sensores', luego coloca tu teléfono en cada orientación según las instrucciones. Mantenlo perfectamente quieto — vibrará cuando se capture una medición, indicándote que cambies a la siguiente posición. Esta calibración es importante para TODOS los modos y debe hacerse periódicamente (aproximadamente cada 10 días)."
     )
     val narrationPhotos: String @Composable get() = s(
         "Welcome to the photo-taking section. Its use is simple, just point your phone towards the stars. Take a photo with the bottom button. Note that your phone MUST be as still as possible (a small animation will confirm that the photo is being taken).",
@@ -304,7 +312,9 @@ object S {
     val topEdgeDown: String @Composable get() = s("Top Edge DOWN (Y-)", "Bord supérieur vers le BAS (Y-)", "Borde superior hacia ABAJO (Y-)")
     val rightEdgeUp: String @Composable get() = s("Right Edge UP (X+)", "Bord droit vers le HAUT (X+)", "Borde derecho hacia ARRIBA (X+)")
     val leftEdgeUp: String @Composable get() = s("Left Edge UP (X-)", "Bord gauche vers le HAUT (X-)", "Borde izquierdo hacia ARRIBA (X-)")
-    val sphereSteps: List<String> @Composable get() = listOf(screenUp, screenDown, topEdgeUp, topEdgeDown, rightEdgeUp, leftEdgeUp)
+    val tiltedForward45: String @Composable get() = s("Tilted 45° Forward", "Incliné 45° vers l'avant", "Inclinado 45° hacia adelante")
+    val tiltedRight45: String @Composable get() = s("Tilted 45° Right", "Incliné 45° vers la droite", "Inclinado 45° hacia la derecha")
+    val sphereSteps: List<String> @Composable get() = listOf(screenUp, screenDown, topEdgeUp, topEdgeDown, rightEdgeUp, leftEdgeUp, tiltedForward45, tiltedRight45)
     val changePositionAlert: String @Composable get() = s("Change Position!", "Changez de position !", "¡Cambia de posición!")
     val holdStillRecording: String @Composable get() = s("Hold Still... Recording...", "Restez immobile… Enregistrement en cours…", "Quédate quieto… Grabando…")
     val keepDeviceSteady: String @Composable get() = s("Keep device steady", "Maintenez l’appareil stable", "Mantén el dispositivo estable")
@@ -372,4 +382,22 @@ object S {
         "Vous rappelle quand la calibration est nécessaire",
         "Te recuerda cuándo es necesaria la calibración"
     )
+
+    // ─── Star Calibration ───
+    val starCalibrationTitle: String @Composable get() = s("Star Calibration", "Calibration par Étoile", "Calibración por Estrellas")
+    val starCalibrationDesc: String @Composable get() = s(
+        "Place your phone stable on a tripod, point it at the night sky, enter your exact coordinates, and click Calibrate 3 times. The offsets will be averaged for better precision.",
+        "Placez votre téléphone stable sur un trépied, pointez-le vers le ciel étoilé, entrez vos coordonnées exactes et cliquez sur Calibrer 3 fois. Les décalages seront moyennés pour une meilleure précision.",
+        "Coloca tu teléfono estable en un trípode, apunta al cielo nocturno, ingresa tus coordenadas exactas y haz clic en Calibrar 3 veces. Los desfases se promediarán para una mayor precisión."
+    )
+    val starCalibration: String @Composable get() = s("Star Calibration", "Calibration par Étoile", "Calibración por Estrellas")
+    val latitudeLabelCal: String @Composable get() = s("Latitude", "Latitude", "Latitud")
+    val longitudeLabelCal: String @Composable get() = s("Longitude", "Longitude", "Longitud")
+    val degLabel: String @Composable get() = s("Deg", "Deg", "Grados")
+    val minLabel: String @Composable get() = s("Min", "Min", "Minutos")
+    val calibrate: String @Composable get() = s("CALIBRATE", "CALIBRER", "CALIBRAR")
+    val calibrationSuccess: String @Composable get() = s("Calibration successful!", "Calibration réussie !", "¡Calibración exitosa!")
+    val calibrationFailed: String @Composable get() = s("Calibration failed", "Échec de la calibration", "Fallo de calibración")
+    val calibratingProgress: String @Composable get() = s("Capturing & solving...", "Capture et résolution...", "Capturando y resolviendo...")
+    val resetOneshot: String @Composable get() = s("Reset 1-Shot Cal", "Réinitialiser 1-Shot", "Restablecer 1-Shot")
 }

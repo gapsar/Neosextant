@@ -24,6 +24,12 @@ val LocalTutorialTargets = compositionLocalOf<MutableMap<Int, Rect>> { error("No
 
 fun Modifier.tutorialTarget(step: Int): Modifier = composed {
     val targets = LocalTutorialTargets.current
+    // Drop the rect when the target leaves composition (e.g. the calibration
+    // screen switches branches with the solver mode) — the overlay must show
+    // the step without a highlight rather than point at a stale location.
+    DisposableEffect(step) {
+        onDispose { targets.remove(step) }
+    }
     onGloballyPositioned { coordinates ->
         targets[step] = coordinates.boundsInRoot()
     }
@@ -71,22 +77,22 @@ fun TutorialOverlay(
                         navController.navigate("settings") { launchSingleTop = true }
                     }
                 }
-                3, 4 -> {
+                3, 4, 5, 6 -> {
                     if (navController.currentDestination?.route != "calibration") {
                         navController.navigate("calibration") { launchSingleTop = true }
                     }
                 }
-                5, 6 -> {
+                7, 8 -> {
                     if (navController.currentDestination?.route != "camera") {
                         navController.navigate("camera") { popUpTo("camera") { inclusive = false } }
                     }
                 }
-                7, 8 -> {
+                9, 10 -> {
                     if (navController.currentDestination?.route != "map") {
                         navController.navigate("map") { launchSingleTop = true }
                     }
                 }
-                9 -> {
+                11 -> {
                     onComplete()
                 }
             }
@@ -119,17 +125,15 @@ fun TutorialOverlay(
                     highlightRect = targets[2]
                 )
                 3 -> NarrationOverlay(
-                    stepLabel = S.stepCalHorizon,
-                    narrationText = S.narrationCalHorizon,
+                    stepLabel = S.stepCalOverview,
+                    narrationText = S.narrationCalOverview,
                     onNext = nextStep,
                     onSkip = endTour,
-                    positionAtTop = true,
-                    usePointer = true,
-                    highlightRect = targets[3]
+                    positionAtTop = true
                 )
                 4 -> NarrationOverlay(
-                    stepLabel = S.stepCalSensors,
-                    narrationText = S.narrationCalSensors,
+                    stepLabel = S.stepCalHorizon,
+                    narrationText = S.narrationCalHorizon,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true,
@@ -137,15 +141,31 @@ fun TutorialOverlay(
                     highlightRect = targets[4]
                 )
                 5 -> NarrationOverlay(
+                    stepLabel = S.stepCalStar,
+                    narrationText = S.narrationCalStar,
+                    onNext = nextStep,
+                    onSkip = endTour,
+                    positionAtTop = true
+                )
+                6 -> NarrationOverlay(
+                    stepLabel = S.stepCalSensors,
+                    narrationText = S.narrationCalSensors,
+                    onNext = nextStep,
+                    onSkip = endTour,
+                    positionAtTop = true,
+                    usePointer = true,
+                    highlightRect = targets[6]
+                )
+                7 -> NarrationOverlay(
                     stepLabel = S.stepPhotos,
                     narrationText = S.narrationPhotos,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true,
                     usePointer = true,
-                    highlightRect = targets[5]
+                    highlightRect = targets[7]
                 )
-                6 -> NarrationOverlay(
+                8 -> NarrationOverlay(
                     stepLabel = S.stepResults,
                     narrationText = S.narrationResults,
                     onNext = nextStep,
@@ -153,14 +173,14 @@ fun TutorialOverlay(
                     positionAtTop = true,
                     usePointer = false
                 )
-                7 -> NarrationOverlay(
+                9 -> NarrationOverlay(
                     stepLabel = S.stepMapIterative,
                     narrationText = S.narrationMapIterative,
                     onNext = nextStep,
                     onSkip = endTour,
                     positionAtTop = true
                 )
-                8 -> NarrationOverlay(
+                10 -> NarrationOverlay(
                     stepLabel = S.stepMapLop,
                     narrationText = S.narrationMapLop,
                     onNext = nextStep,

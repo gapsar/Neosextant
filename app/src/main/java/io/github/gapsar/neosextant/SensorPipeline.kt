@@ -74,25 +74,34 @@ class SensorPipeline(private val calibrator: SensorCalibrator) {
         return SensorCalibrator.Vec3(unitG.x, rotatedY, rotatedZ)
     }
 
-    /**
-     * Applies only the legacy pitch offset rotation to an already-normalized gravity vector.
-     * Used by the AdaptiveSensorFusion path where calibration and normalization
-     * are handled upstream.
-     *
-     * @param unitGravity A unit vector representing gravity direction (already calibrated & normalized).
-     * @param pitchOffsetDeg The horizon calibration offset in degrees.
-     * @return The rotated gravity unit vector.
-     */
-    fun applyPitchOffset(unitGravity: SensorCalibrator.Vec3, pitchOffsetDeg: Double): SensorCalibrator.Vec3 {
-        if (pitchOffsetDeg == 0.0) return unitGravity
+    fun applyOffsets(unitGravity: SensorCalibrator.Vec3, pitchOffsetDeg: Double, rollOffsetDeg: Double): SensorCalibrator.Vec3 {
+        var x = unitGravity.x
+        var y = unitGravity.y
+        var z = unitGravity.z
 
-        val thetaRad = Math.toRadians(pitchOffsetDeg)
-        val cos = cos(thetaRad).toFloat()
-        val sin = sin(thetaRad).toFloat()
+        // Apply Roll offset (rotation around Z axis)
+        if (rollOffsetDeg != 0.0) {
+            val rollRad = Math.toRadians(rollOffsetDeg)
+            val cosR = cos(rollRad).toFloat()
+            val sinR = sin(rollRad).toFloat()
+            val newX = x * cosR + y * sinR
+            val newY = -x * sinR + y * cosR
+            x = newX
+            y = newY
+        }
 
-        val rotatedY = unitGravity.y * cos - unitGravity.z * sin
-        val rotatedZ = unitGravity.y * sin + unitGravity.z * cos
+        // Apply Pitch offset (rotation around X axis)
+        if (pitchOffsetDeg != 0.0) {
+            val thetaRad = Math.toRadians(pitchOffsetDeg)
+            val cos = cos(thetaRad).toFloat()
+            val sin = sin(thetaRad).toFloat()
 
-        return SensorCalibrator.Vec3(unitGravity.x, rotatedY, rotatedZ)
+            val rotatedY = y * cos - z * sin
+            val rotatedZ = y * sin + z * cos
+            y = rotatedY
+            z = rotatedZ
+        }
+
+        return SensorCalibrator.Vec3(x, y, z)
     }
 }

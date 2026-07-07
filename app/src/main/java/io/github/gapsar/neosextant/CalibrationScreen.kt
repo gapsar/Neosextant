@@ -1,15 +1,20 @@
 package io.github.gapsar.neosextant
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -27,52 +32,95 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import io.github.gapsar.neosextant.model.SolverMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.sqrt
 
-// Helper to access accelerometer for the calibration dialog
-// We need to pass the sensor values from MainActivity or listen here.
-// Since MainActivity already listens, we can pass a "getRawAccel" function or similar.
-// Or just let MainActivity pass `sensorCalibrator`.
-
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalCamera2Interop::class)
 @Composable
 fun CalibrationScreen(
     onNavigateBack: () -> Unit,
     getRawPitch: () -> Double?,
-    onSaveCalibration: (Double) -> Unit,
-    currentOffset: Double,
+    getRawRoll: () -> Double?,
+    onSaveCalibration: (Double, Double) -> Unit,
+    currentPitchOffset: Double,
+    currentRollOffset: Double,
     sensorCalibrator: SensorCalibrator,
     sensorPipeline: SensorPipeline,
-    rawAccelState: androidx.compose.runtime.State<SensorCalibrator.Vec3>
+    rawAccelState: State<SensorCalibrator.Vec3>,
+    solverMode: SolverMode,
+    startPitchAveraging: () -> Unit,
+    stopPitchAveraging: () -> SensorCalibrator.Vec3?,
+    onSaveOneshotCalibration: (Double, Double) -> Unit,
+    currentOneshotPitchOffset: Double,
+    currentOneshotRollOffset: Double,
+    iso: Int = 3200,
+    exposureTimeMs: Int = 250,
+    supportsManualExposure: Boolean = true
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val previewView = remember { PreviewView(context) }
+    val imageCapture = remember(iso, exposureTimeMs, supportsManualExposure) {
+        buildAstroImageCapture(iso, exposureTimeMs, supportsManualExposure)
+    }
+    val scope = rememberCoroutineScope()
+    val calibratingProgressStr = S.calibratingProgress
+    val calibrationSuccessStr = S.calibrationSuccess
+    val calibrationFailedStr = S.calibrationFailed
 
+    // ─── Horizon Calibration State ───
     var heightOfEye by remember { mutableStateOf("2.0") } // Default 2 meters
     var currentPitch by remember { mutableStateOf(0.0) }
+    var currentRoll by remember { mutableStateOf(0.0) }
+    val REQUIRED_SAMPLES = 3
+    val calibrationPitchOffsets = remember { mutableStateListOf<Double>() }
+    val calibrationRollOffsets = remember { mutableStateListOf<Double>() }
+
+    // ─── Star Calibration State ───
+    var latDeg by remember { mutableStateOf("") }
+    var latMin by remember { mutableStateOf("") }
+    var latDir by remember { mutableStateOf("N") }
+    var lonDeg by remember { mutableStateOf("") }
+    var lonMin by remember { mutableStateOf("") }
+    var lonDir by remember { mutableStateOf("E") }
+    var statusMessage by remember { mutableStateOf("") }
+    var isCalibrating by remember { mutableStateOf(false) }
+
+    // Multi-sample 1-Shot calibration state
+    val REQUIRED_ONESHOT_SAMPLES = 3
+    val oneshotPitchOffsets = remember { mutableStateListOf<Double>() }
+    val oneshotRollOffsets = remember { mutableStateListOf<Double>() }
+
+    // Local state for displayed offsets — updates immediately on calibration success
+    var displayedOneshotPitch by remember { mutableStateOf(currentOneshotPitchOffset) }
+    var displayedOneshotRoll by remember { mutableStateOf(currentOneshotRollOffset) }
+
     var showAdvancedDialog by remember { mutableStateOf(false) }
 
-    // Multi-sample horizon calibration: accumulate 3 readings, then average
-    val REQUIRED_SAMPLES = 3
-    val calibrationOffsets = remember { mutableStateListOf<Double>() }
-
-    // Update pitch reading periodically
+    // Update pitch and roll readings periodically
     LaunchedEffect(Unit) {
         while (true) {
-            // We now get the RAW pitch directly from MainActivity, which is unaffected
-            // by the currently saved calibration offset.
             val rawAlt = getRawPitch() ?: 0.0
+            val rawRll = getRawRoll() ?: 0.0
 
             currentPitch = rawAlt
-            kotlinx.coroutines.delay(100)
+            currentRoll = rawRll
+            delay(100)
         }
     }
 
     // Camera Setup (C-02: Non-blocking init)
     LaunchedEffect(cameraProviderFuture) {
-        val cameraProvider = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val cameraProvider = withContext(Dispatchers.IO) {
             cameraProviderFuture.get()
         }
         val preview = Preview.Builder().build().also {
@@ -85,7 +133,8 @@ fun CalibrationScreen(
             cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
-                preview
+                preview,
+                imageCapture
             )
         } catch (exc: Exception) {
             Log.e("CalibrationScreen", "Use case binding failed", exc)
@@ -106,9 +155,6 @@ fun CalibrationScreen(
         }
     }
 
-    // --- UI Logic ---
-
-    // We replace the "Advanced" dialog with this polished Sphere Calibration flow.
     if (showAdvancedDialog) {
         SphereCalibrationDialog(
             onDismiss = { showAdvancedDialog = false },
@@ -120,9 +166,9 @@ fun CalibrationScreen(
 
     Scaffold(
         topBar = {
-        // ... (No changes to topbar, but for context in replacement)
+            val title = if (solverMode == SolverMode.ONE_SHOT) S.starCalibrationTitle else S.horizonCalibration
             TopAppBar(
-                title = { Text(S.horizonCalibration) },
+                title = { Text(title) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = S.back)
@@ -140,158 +186,521 @@ fun CalibrationScreen(
             // 1. Camera Preview
             AndroidView({ previewView }, modifier = Modifier.fillMaxSize())
 
-            // 2. Crosshair Overlay
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val width = size.width
-                val height = size.height
-                val centerY = height / 2f
+            // 2. Crosshair Overlay (only for horizon calibration, not 1-Shot)
+            if (solverMode != SolverMode.ONE_SHOT) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+                    val centerY = height / 2f
 
-                // Horizontal line (Horizon target)
-                drawLine(
-                    color = Color.Red,
-                    start = Offset(0f, centerY),
-                    end = Offset(width, centerY),
-                    strokeWidth = 4f
-                )
+                    // Horizontal line (Horizon/Center target)
+                    drawLine(
+                        color = Color.Red,
+                        start = Offset(0f, centerY),
+                        end = Offset(width, centerY),
+                        strokeWidth = 4f
+                    )
 
-                // Vertical center marker
-                drawLine(
-                    color = Color.Red,
-                    start = Offset(width / 2f, centerY - 50f),
-                    end = Offset(width / 2f, centerY + 50f),
-                    strokeWidth = 4f
-                )
+                    // Vertical center marker
+                    drawLine(
+                        color = Color.Red,
+                        start = Offset(width / 2f, centerY - 50f),
+                        end = Offset(width / 2f, centerY + 50f),
+                        strokeWidth = 4f
+                    )
+                }
             }
 
-            // 3. Controls Overlay
+            // 3. Controls Overlay (Conditional based on SolverMode)
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .heightIn(max = 320.dp)
                     .background(Color.Black.copy(alpha = 0.7f))
-                    .padding(paddingValues)
-                    .padding(16.dp),
+                    .padding(bottom = paddingValues.calculateBottomPadding())
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    text = S.alignHorizon,
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = heightOfEye,
-                        onValueChange = { heightOfEye = it },
-                        label = { Text(S.heightOfEye, color = Color.LightGray) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color.White,
-                            unfocusedBorderColor = Color.LightGray
-                        ),
-                        modifier = Modifier.width(150.dp)
+                if (solverMode == SolverMode.ONE_SHOT) {
+                    // ─── STAR CALIBRATION UI ───
+                    Text(
+                        text = S.starCalibrationDesc,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
-                }
 
-                Text(
-                    text = S.sensorPitchFmt.format(currentPitch),
-                    color = Color.Yellow,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-
-                 Text(
-                    text = S.currentOffsetFmt.format(currentOffset),
-                    color = Color.Gray,
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                // Multi-sample calibration progress
-                if (calibrationOffsets.isNotEmpty()) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    // Latitude Degree, Minutes, N/S
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Calibration ${calibrationOffsets.size}/$REQUIRED_SAMPLES",
-                            color = Color.Green,
-                            style = MaterialTheme.typography.titleSmall
+                        Text(S.latitudeLabelCal + ":", color = Color.White, modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodyMedium)
+                        OutlinedTextField(
+                            value = latDeg,
+                            onValueChange = { latDeg = it },
+                            label = { Text(S.degLabel, color = Color.LightGray) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.LightGray
+                            ),
+                            modifier = Modifier.weight(1f)
                         )
-                        calibrationOffsets.forEachIndexed { i, offset ->
-                            Text(
-                                text = "#${i + 1}: %.4f°".format(offset),
-                                color = Color.LightGray,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        if (calibrationOffsets.size >= 2) {
-                            val runningAvg = calibrationOffsets.average()
-                            Text(
-                                text = "Running avg: %.4f°".format(runningAvg),
-                                color = Color.Yellow,
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                        OutlinedTextField(
+                            value = latMin,
+                            onValueChange = { latMin = it },
+                            label = { Text(S.minLabel, color = Color.LightGray) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.LightGray
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = { latDir = if (latDir == "N") "S" else "N" },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                        ) {
+                            Text(latDir, color = Color.White)
                         }
                     }
-                }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { showAdvancedDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                        modifier = Modifier.weight(1f).tutorialTarget(4)
+                    // Longitude Degree, Minutes, E/W
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                         Text(S.calibrateSensorsUpper, maxLines = 1)
+                        Text(S.longitudeLabelCal + ":", color = Color.White, modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodyMedium)
+                        OutlinedTextField(
+                            value = lonDeg,
+                            onValueChange = { lonDeg = it },
+                            label = { Text(S.degLabel, color = Color.LightGray) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.LightGray
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = lonMin,
+                            onValueChange = { lonMin = it },
+                            label = { Text(S.minLabel, color = Color.LightGray) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.LightGray
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = { lonDir = if (lonDir == "E") "W" else "E" },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                        ) {
+                            Text(lonDir, color = Color.White)
+                        }
                     }
 
-                    Button(
-                        onClick = {
-                            val h = heightOfEye.toDoubleOrNull() ?: 0.0
-                            val dipArcMin = 1.758 * sqrt(h)
-                            val dipDeg = dipArcMin / 60.0
+                    if (statusMessage.isNotEmpty()) {
+                        Text(
+                            text = statusMessage,
+                            color = if (statusMessage.contains(S.calibrationSuccess)) Color.Green else Color.Red,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
 
-                            // Offset = True - Measured
-                            // True = -dipDeg
-                            // Measured = currentPitch (We ensured this is Raw above)
-                            val newOffset = -dipDeg - currentPitch
-                            calibrationOffsets.add(newOffset)
+                    Text(
+                        text = "Current 1-Shot offsets: Pitch: %.4f° | Roll: %.4f°".format(displayedOneshotPitch, displayedOneshotRoll),
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.bodySmall
+                    )
 
-                            if (calibrationOffsets.size >= REQUIRED_SAMPLES) {
-                                // All samples collected — save the averaged offset
-                                val averagedOffset = calibrationOffsets.average()
-                                Log.d("CalibrationScreen", "Multi-sample calibration complete. Offsets: $calibrationOffsets, avg: $averagedOffset")
-                                onSaveCalibration(averagedOffset)
-                                onNavigateBack()
+                    // Multi-sample calibration progress
+                    if (oneshotPitchOffsets.isNotEmpty()) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Calibration ${oneshotPitchOffsets.size}/$REQUIRED_ONESHOT_SAMPLES",
+                                color = Color.Green,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            oneshotPitchOffsets.forEachIndexed { i, offset ->
+                                Text(
+                                    text = "#${i + 1}: P: %.4f° | R: %.4f°".format(offset, oneshotRollOffsets[i]),
+                                    color = Color.LightGray,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
-                        },
-                        modifier = Modifier.weight(1f).tutorialTarget(3),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        val label = if (calibrationOffsets.isEmpty()) {
-                            S.setHorizon
-                        } else {
-                            "${S.setHorizon} (${calibrationOffsets.size + 1}/$REQUIRED_SAMPLES)"
+                            if (oneshotPitchOffsets.size >= 2) {
+                                val runningPitchAvg = oneshotPitchOffsets.average()
+                                val runningRollAvg = oneshotRollOffsets.average()
+                                Text(
+                                    text = "Running avg: P: %.4f° | R: %.4f°".format(runningPitchAvg, runningRollAvg),
+                                    color = Color.Yellow,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
-                        Text(label, maxLines = 1)
                     }
-                }
 
-                // Reset button — visible when at least one sample is recorded
-                if (calibrationOffsets.isNotEmpty()) {
-                    TextButton(
-                        onClick = { calibrationOffsets.clear() }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { showAdvancedDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                            modifier = Modifier.weight(1f).tutorialTarget(6)
+                        ) {
+                            Text(S.calibrateSensorsUpper, maxLines = 1)
+                        }
+
+                        Button(
+                            onClick = {
+                                val latD = latDeg.toDoubleOrNull()
+                                val latM = latMin.toDoubleOrNull()
+                                val lonD = lonDeg.toDoubleOrNull()
+                                val lonM = lonMin.toDoubleOrNull()
+
+                                if (latD == null || latM == null || lonD == null || lonM == null ||
+                                    latD < 0 || latD > 90 || latM < 0 || latM >= 60 ||
+                                    lonD < 0 || lonD > 180 || lonM < 0 || lonM >= 60) {
+                                    statusMessage = "Invalid coordinates format"
+                                    return@Button
+                                }
+
+                                isCalibrating = true
+                                statusMessage = calibratingProgressStr
+
+                                // Start sensor pitch/gyro averaging
+                                startPitchAveraging()
+
+                                captureCalibrationPhoto(context, imageCapture, onImageCaptured = { uri, path ->
+                                    // Timestamp at shutter: the plate solve below can take many seconds,
+                                    // and the expected zenith rotates ~15 arcsec per second of delay.
+                                    val captureTime = TimeSynchronizer.getTrueTime()
+                                    val avgGravity = stopPitchAveraging()
+                                    if (avgGravity == null) {
+                                        isCalibrating = false
+                                        statusMessage = "Error: gravity vector not captured."
+                                        return@captureCalibrationPhoto
+                                    }
+
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val py = com.chaquo.python.Python.getInstance()
+                                            val pythonScript = py.getModule("celestial_navigator")
+                                            val imageName = File(path).name
+
+                                            val imageResultJsonStr = pythonScript.callAttr("image_processor", imageName, path).toString()
+                                            val imageResultJson = org.json.JSONObject(imageResultJsonStr)
+                                            val isSolved = imageResultJson.optInt("solved") == 1
+
+                                            // Delete photo file since we don't need to persist calibration photos
+                                            try { File(path).delete() } catch (e: Exception) {}
+
+                                            if (!isSolved) {
+                                                withContext(Dispatchers.Main) {
+                                                    isCalibrating = false
+                                                    statusMessage = "$calibrationFailedStr: Stars not recognized."
+                                                }
+                                                return@launch
+                                            }
+
+                                            val ra = imageResultJson.optDouble("ra_deg")
+                                            val dec = imageResultJson.optDouble("dec_deg")
+                                            val roll = imageResultJson.optDouble("roll_deg")
+
+                                            val latVal = latD + (latM / 60.0)
+                                            val latSigned = if (latDir == "S") -latVal else latVal
+                                            val lonVal = lonD + (lonM / 60.0)
+                                            val lonSigned = if (lonDir == "W") -lonVal else lonVal
+
+                                            // C-03: Format as ISO 8601 UTC string for Python/Astropy
+                                            val utcFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+                                            utcFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                                            val captureTimeIso = utcFormat.format(captureTime)
+
+                                            val calResultJsonStr = pythonScript.callAttr(
+                                                "solve_calibration_offsets",
+                                                ra, dec, roll,
+                                                avgGravity.x, avgGravity.y, avgGravity.z,
+                                                latSigned, lonSigned,
+                                                captureTimeIso
+                                            ).toString()
+
+                                            val calResultJson = org.json.JSONObject(calResultJsonStr)
+                                            val err = calResultJson.optString("error").takeIf { it.isNotEmpty() && it != "null" }
+
+                                            withContext(Dispatchers.Main) {
+                                                isCalibrating = false
+                                                if (err != null) {
+                                                    statusMessage = "$calibrationFailedStr: $err"
+                                                } else {
+                                                    val pitchOffset = calResultJson.getDouble("pitch_offset_deg")
+                                                    val rollOffset = calResultJson.getDouble("roll_offset_deg")
+
+                                                    // Reject outliers: absolute offset > 5° on either axis
+                                                    val MAX_OFFSET_DEG = 5.0
+                                                    if (abs(pitchOffset) > MAX_OFFSET_DEG || abs(rollOffset) > MAX_OFFSET_DEG) {
+                                                        statusMessage = "Sample rejected: offset too large (P: %.2f° R: %.2f°, max ±%.0f°). Retake.".format(pitchOffset, rollOffset, MAX_OFFSET_DEG)
+                                                        Log.w("CalibrationScreen", "Rejected 1-Shot sample: pitch=$pitchOffset, roll=$rollOffset (exceeds ±$MAX_OFFSET_DEG°)")
+                                                        return@withContext
+                                                    }
+
+                                                    // Reject if deviation from running mean > 5° (likely false match)
+                                                    if (oneshotPitchOffsets.isNotEmpty()) {
+                                                        val runningPitchMean = oneshotPitchOffsets.average()
+                                                        val runningRollMean = oneshotRollOffsets.average()
+                                                        if (abs(pitchOffset - runningPitchMean) > MAX_OFFSET_DEG || abs(rollOffset - runningRollMean) > MAX_OFFSET_DEG) {
+                                                            statusMessage = "Sample rejected: deviates too much from previous samples. Retake."
+                                                            Log.w("CalibrationScreen", "Rejected 1-Shot sample: deviation from mean too large")
+                                                            return@withContext
+                                                        }
+                                                    }
+
+                                                    // Accumulate this sample
+                                                    oneshotPitchOffsets.add(pitchOffset)
+                                                    oneshotRollOffsets.add(rollOffset)
+
+                                                    if (oneshotPitchOffsets.size >= REQUIRED_ONESHOT_SAMPLES) {
+                                                        // All samples collected — save the averaged offsets
+                                                        val avgPitch = oneshotPitchOffsets.average()
+                                                        val avgRoll = oneshotRollOffsets.average()
+                                                        Log.d("CalibrationScreen", "Multi-sample 1-Shot calibration complete. Pitch avg: $avgPitch, Roll avg: $avgRoll")
+                                                        onSaveOneshotCalibration(avgPitch, avgRoll)
+                                                        displayedOneshotPitch = avgPitch
+                                                        displayedOneshotRoll = avgRoll
+                                                        statusMessage = calibrationSuccessStr
+                                                        oneshotPitchOffsets.clear()
+                                                        oneshotRollOffsets.clear()
+                                                    } else {
+                                                        statusMessage = "Sample ${oneshotPitchOffsets.size}/$REQUIRED_ONESHOT_SAMPLES captured. Take another photo."
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.e("CalibrationScreen", "Calibration failed", e)
+                                            withContext(Dispatchers.Main) {
+                                                isCalibrating = false
+                                                statusMessage = "$calibrationFailedStr: ${e.message}"
+                                            }
+                                        }
+                                    }
+                                }, onError = { exc ->
+                                    stopPitchAveraging()
+                                    isCalibrating = false
+                                    statusMessage = "$calibrationFailedStr: ${exc.message}"
+                                })
+                            },
+                            enabled = !isCalibrating,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            if (isCalibrating) {
+                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                            } else {
+                                val label = if (oneshotPitchOffsets.isEmpty()) {
+                                    S.calibrate
+                                } else {
+                                    "${S.calibrate} (${oneshotPitchOffsets.size + 1}/$REQUIRED_ONESHOT_SAMPLES)"
+                                }
+                                Text(label, maxLines = 1)
+                            }
+                        }
+                    }
+
+                    // Reset button — visible when at least one sample is recorded
+                    if (oneshotPitchOffsets.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                oneshotPitchOffsets.clear()
+                                oneshotRollOffsets.clear()
+                                statusMessage = ""
+                            }
+                        ) {
+                            Text("Reset", color = Color.Red)
+                        }
+                    }
+
+                } else {
+                    // ─── HORIZON CALIBRATION UI ───
+                    Text(
+                        text = S.alignHorizon,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Reset", color = Color.Red)
+                        OutlinedTextField(
+                            value = heightOfEye,
+                            onValueChange = { heightOfEye = it },
+                            label = { Text(S.heightOfEye, color = Color.LightGray) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.LightGray
+                            ),
+                            modifier = Modifier.width(150.dp)
+                        )
+                    }
+
+                    Text(
+                        text = S.sensorPitchFmt.format(currentPitch),
+                        color = Color.Yellow,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Sensor Roll: %.4f°".format(currentRoll),
+                        color = Color.Yellow,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+
+                    Text(
+                        text = "${S.currentOffsetFmt.format(currentPitchOffset)} | Roll Offset: %.4f°".format(currentRollOffset),
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    // Multi-sample calibration progress
+                    if (calibrationPitchOffsets.isNotEmpty()) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Calibration ${calibrationPitchOffsets.size}/$REQUIRED_SAMPLES",
+                                color = Color.Green,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            calibrationPitchOffsets.forEachIndexed { i, offset ->
+                                Text(
+                                    text = "#${i + 1}: P: %.4f° | R: %.4f°".format(offset, calibrationRollOffsets[i]),
+                                    color = Color.LightGray,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            if (calibrationPitchOffsets.size >= 2) {
+                                val runningPitchAvg = calibrationPitchOffsets.average()
+                                val runningRollAvg = calibrationRollOffsets.average()
+                                Text(
+                                    text = "Running avg: P: %.4f° | R: %.4f°".format(runningPitchAvg, runningRollAvg),
+                                    color = Color.Yellow,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { showAdvancedDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                            modifier = Modifier.weight(1f).tutorialTarget(6)
+                        ) {
+                            Text(S.calibrateSensorsUpper, maxLines = 1)
+                        }
+
+                        Button(
+                            onClick = {
+                                val h = heightOfEye.toDoubleOrNull() ?: 0.0
+                                val dipArcMin = 1.758 * sqrt(h)
+                                val dipDeg = dipArcMin / 60.0
+
+                                // True Pitch = -dipDeg
+                                // Measured Pitch = currentPitch
+                                val newPitchOffset = currentPitch + dipDeg
+                                // True Roll = 0.0
+                                val newRollOffset = currentRoll
+                                calibrationPitchOffsets.add(newPitchOffset)
+                                calibrationRollOffsets.add(newRollOffset)
+
+                                if (calibrationPitchOffsets.size >= REQUIRED_SAMPLES) {
+                                    // All samples collected — save the averaged offset
+                                    val averagedPitchOffset = calibrationPitchOffsets.average()
+                                    val averagedRollOffset = calibrationRollOffsets.average()
+                                    Log.d("CalibrationScreen", "Multi-sample calibration complete. Pitch avg: $averagedPitchOffset, Roll avg: $averagedRollOffset")
+                                    onSaveCalibration(averagedPitchOffset, averagedRollOffset)
+                                    onNavigateBack()
+                                }
+                            },
+                            modifier = Modifier.weight(1f).tutorialTarget(4),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            val label = if (calibrationPitchOffsets.isEmpty()) {
+                                S.setHorizon
+                            } else {
+                                "${S.setHorizon} (${calibrationPitchOffsets.size + 1}/$REQUIRED_SAMPLES)"
+                            }
+                            Text(label, maxLines = 1)
+                        }
+                    }
+
+                    // Reset button — visible when at least one sample is recorded
+                    if (calibrationPitchOffsets.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                calibrationPitchOffsets.clear()
+                                calibrationRollOffsets.clear()
+                            }
+                        ) {
+                            Text("Reset", color = Color.Red)
+                        }
                     }
                 }
             }
         }
     }
+}
+
+private fun captureCalibrationPhoto(
+    context: Context,
+    imageCapture: ImageCapture,
+    onImageCaptured: (Uri, String) -> Unit,
+    onError: (ImageCaptureException) -> Unit
+) {
+    val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
+        .format(System.currentTimeMillis()) + ".jpg"
+    val photoFile = File(
+        context.getExternalFilesDir(null),
+        name
+    )
+
+    val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
+
+    imageCapture.takePicture(
+        outputOptions,
+        ContextCompat.getMainExecutor(context),
+        object : ImageCapture.OnImageSavedCallback {
+            override fun onError(exc: ImageCaptureException) {
+                Log.e("CalibrationScreen", "Photo capture failed: ${exc.message}", exc)
+                onError(exc)
+            }
+
+            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                val savedUri = Uri.fromFile(photoFile)
+                onImageCaptured(savedUri, photoFile.absolutePath)
+            }
+        })
 }
 
 @Composable
@@ -301,7 +710,6 @@ fun SphereCalibrationDialog(
     context: Context,
     rawAccelState: State<SensorCalibrator.Vec3>
 ) {
-    // Use shared raw accelerometer state from MainActivity (no duplicate listener)
     val vibrator = remember {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager
@@ -412,7 +820,7 @@ fun SphereCalibrationDialog(
                     }
                 }
             }
-            kotlinx.coroutines.delay(16) // ~60fps polling from shared state
+            delay(16) // ~60fps polling from shared state
         }
     }
 

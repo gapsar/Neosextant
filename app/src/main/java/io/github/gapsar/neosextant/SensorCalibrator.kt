@@ -49,7 +49,7 @@ class SensorCalibrator(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private var params: CalibrationParams = loadParams()
 
-    // Temporary storage for the 6+ data points during active calibration
+    // Temporary storage for the 8 data points during active calibration
     private val recordedPoints = mutableListOf<Vec3>()
 
     fun getParams() = params
