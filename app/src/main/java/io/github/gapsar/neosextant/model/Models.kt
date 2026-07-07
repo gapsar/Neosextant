@@ -11,6 +11,16 @@ enum class AnalysisState {
     PENDING, SUCCESS, FAILURE
 }
 
+// Holds information about a single matched catalogue star
+data class MatchedStar(
+    val name: String?,
+    val constellation: String?,
+    val hipId: Int,
+    val y: Double,
+    val x: Double,
+    val magnitude: Double?
+)
+
 // Holds the result from the Tetra3 Python script
 data class Tetra3AnalysisResult(
     val analysisState: AnalysisState,
@@ -20,6 +30,7 @@ data class Tetra3AnalysisResult(
     val rollDeg: Double? = null,
     val fovDeg: Double? = null,
     val centroids: List<Pair<Double, Double>> = emptyList(),
+    val matchedStars: List<MatchedStar> = emptyList(),
     val errorMessage: String? = null
 )
 
@@ -32,6 +43,16 @@ data class LineOfPositionData(
     val errorMessage: String? = null
 )
 
+// Holds results for a single sub-image within a burst capture
+data class BurstSubResult(
+    val path: String,
+    val uri: Uri,
+    val gravityVector: SensorCalibrator.Vec3,
+    val timestamp: String,
+    val measuredHeight: Double?,
+    val tetra3Result: Tetra3AnalysisResult = Tetra3AnalysisResult(analysisState = AnalysisState.PENDING)
+)
+
 // A comprehensive data class to hold all information about a captured image
 data class ImageData(
     val id: Long = System.currentTimeMillis(),
@@ -41,5 +62,6 @@ data class ImageData(
     val measuredHeight: Double?,
     val gravityVector: SensorCalibrator.Vec3? = null,
     val tetra3Result: Tetra3AnalysisResult = Tetra3AnalysisResult(analysisState = AnalysisState.PENDING),
-    val lopData: LineOfPositionData? = null
+    val lopData: LineOfPositionData? = null,
+    val burstSubResults: List<BurstSubResult> = emptyList()
 )

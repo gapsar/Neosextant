@@ -144,6 +144,20 @@ class HistoryRepository(private val context: Context) {
                     centroidsArr.put(pairArr)
                 }
                 trObj.put("centroids", centroidsArr)
+
+                val matchedStarsArr = JSONArray()
+                tr.matchedStars.forEach { s ->
+                    val starObj = org.json.JSONObject()
+                    s.name?.let { starObj.put("name", it) }
+                    s.constellation?.let { starObj.put("constellation", it) }
+                    starObj.put("hipId", s.hipId)
+                    starObj.put("y", s.y)
+                    starObj.put("x", s.x)
+                    s.magnitude?.let { starObj.put("magnitude", it) }
+                    matchedStarsArr.put(starObj)
+                }
+                trObj.put("matchedStars", matchedStarsArr)
+
                 obj.put("tetra3Result", trObj)
                 
                 img.lopData?.let { ld ->
@@ -177,6 +191,24 @@ class HistoryRepository(private val context: Context) {
                             centroids.add(Pair(pairArr.getDouble(0), pairArr.getDouble(1)))
                         }
                     }
+
+                    val matchedStarsArr = trObj.optJSONArray("matchedStars")
+                    val matchedStars = mutableListOf<io.github.gapsar.neosextant.model.MatchedStar>()
+                    if (matchedStarsArr != null) {
+                        for (j in 0 until matchedStarsArr.length()) {
+                            val starObj = matchedStarsArr.getJSONObject(j)
+                            matchedStars.add(
+                                io.github.gapsar.neosextant.model.MatchedStar(
+                                    name = if (starObj.has("name")) starObj.getString("name") else null,
+                                    constellation = if (starObj.has("constellation")) starObj.getString("constellation") else null,
+                                    hipId = starObj.optInt("hipId", -1),
+                                    y = starObj.optDouble("y", 0.0),
+                                    x = starObj.optDouble("x", 0.0),
+                                    magnitude = if (starObj.has("magnitude")) starObj.getDouble("magnitude") else null
+                                )
+                            )
+                        }
+                    }
                     
                     val tetra3Result = io.github.gapsar.neosextant.model.Tetra3AnalysisResult(
                         analysisState = io.github.gapsar.neosextant.model.AnalysisState.valueOf(trObj.getString("analysisState")),
@@ -186,6 +218,7 @@ class HistoryRepository(private val context: Context) {
                         rollDeg = if (trObj.has("rollDeg")) trObj.getDouble("rollDeg") else null,
                         fovDeg = if (trObj.has("fovDeg")) trObj.getDouble("fovDeg") else null,
                         centroids = centroids,
+                        matchedStars = matchedStars,
                         errorMessage = if (trObj.has("errorMessage")) trObj.getString("errorMessage") else null
                     )
                     

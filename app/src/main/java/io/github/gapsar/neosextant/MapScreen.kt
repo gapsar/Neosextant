@@ -43,6 +43,9 @@ import androidx.navigation.NavController
 import io.github.gapsar.neosextant.model.*
 import io.github.gapsar.neosextant.ui.components.ImageSlotView
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -62,6 +65,7 @@ fun MapScreen(
     capturedImages: List<ImageData>,
     computedLatitude: Double,
     computedLongitude: Double,
+    individualFixes: List<Pair<Double, Double>> = emptyList(),
     onImageClick: (ImageData) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -106,12 +110,15 @@ fun MapScreen(
                 .padding(16.dp)
         ) {
             // Map View
-            Card(elevation = CardDefaults.cardElevation(4.dp)) {
-                Box {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                elevation = CardDefaults.cardElevation(4.dp)
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
                     AndroidView(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(400.dp),
+                        modifier = Modifier.fillMaxSize(),
                         factory = {
                             mapView.apply {
                                 setMultiTouchControls(true)
@@ -189,6 +196,25 @@ fun MapScreen(
                                 }
                                 addLopLine(view, estimatedGeoPoint, azimuth, intercept, color)
                             }
+
+                            // Draw individual 1-Shot fix markers (multi-shot mode)
+                            if (individualFixes.size > 1) {
+                                individualFixes.forEachIndexed { index, (lat, lon) ->
+                                    val fixPoint = GeoPoint(lat, lon)
+                                    addIndividualFixMarker(view, context, fixPoint, index + 1)
+                                    // Dashed line from individual fix to median
+                                    val line = Polyline()
+                                    line.addPoint(fixPoint)
+                                    line.addPoint(computedGeoPoint)
+                                    line.outlinePaint.apply {
+                                        color = Color.parseColor("#FF9800")
+                                        strokeWidth = 2f
+                                        pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 10f), 0f)
+                                        style = android.graphics.Paint.Style.STROKE
+                                    }
+                                    view.overlays.add(line)
+                                }
+                            }
                             view.invalidate()
                         }
                     )
@@ -241,16 +267,13 @@ fun MapScreen(
 
             if (capturedImages.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
-                Row(
+                LazyRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
                 ) {
-                    for (i in 0 until 3) {
-                        val imageInfo = capturedImages.getOrNull(i)
+                    items(capturedImages) { imageInfo ->
                         ImageSlotView(
-                            modifier = Modifier
-                                .weight(1f)
-                                .aspectRatio(1f),
+                            modifier = Modifier.size(80.dp),
                             imageInfo = imageInfo,
                             isSelected = false,
                             isProcessing = false,
@@ -409,6 +432,45 @@ private fun addLopLine(mapView: MapView, estimatedPosition: GeoPoint, azimuth: F
 
     mapView.overlays.add(lopLine)
     mapView.invalidate()
+}
+
+/**
+ * Individual 1-Shot Fix marker: orange hollow circle with fix number.
+ * Communicates "individual observation fix" visually, distinct from
+ * the green estimated marker and red computed median marker.
+ */
+private fun addIndividualFixMarker(mapView: MapView, context: Context, geoPoint: GeoPoint, index: Int) {
+    val marker = Marker(mapView)
+    marker.position = geoPoint
+    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+    marker.title = "Fix #$index: %.4f, %.4f".format(geoPoint.latitude, geoPoint.longitude)
+
+    val size = 36
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    // Orange hollow circle
+    val circlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FF9800")
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+    canvas.drawCircle(cx, cy, size / 2f - 3f, circlePaint)
+
+    // Fix number text in center
+    val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FF9800")
+        textSize = 16f
+        textAlign = android.graphics.Paint.Align.CENTER
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+    }
+    val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2
+    canvas.drawText("$index", cx, textY, textPaint)
+
+    marker.icon = android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+    mapView.overlays.add(marker)
 }
 
 
