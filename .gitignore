@@ -32,3 +32,7 @@ app/releases/
 # Keystore release
 *.jks
 *.keystore
+
+# Local Gradle user homes (created by CLI builds with GRADLE_USER_HOME=$PWD/...)
+/gradle_home/
+/.gradle_home/
