@@ -30,11 +30,16 @@ fun AppNavigator(
     // Pitch
     getCurrentPitch: () -> Double?,
     getRawPitch: () -> Double?,
+    getRawRoll: () -> Double?,
     startPitchAveraging: () -> Unit,
-    stopPitchAveraging: () -> Pair<Double?, SensorCalibrator.Vec3?>,
+    stopPitchAveraging: () -> SensorCalibrator.Vec3?,
     // Calibration
-    saveCalibrationOffset: (Double) -> Unit,
+    saveCalibrationOffset: (Double, Double) -> Unit,
     getCalibrationOffset: () -> Double,
+    getRollOffset: () -> Double,
+    saveOneshotCalibrationOffset: (Double, Double) -> Unit,
+    getOneshotCalibrationOffset: () -> Double,
+    getOneshotRollOffset: () -> Double,
     sensorCalibrator: SensorCalibrator,
     sensorPipeline: SensorPipeline,
     rawAccelState: State<SensorCalibrator.Vec3>,
@@ -45,7 +50,11 @@ fun AppNavigator(
     markTutorialCompleted: () -> Unit,
     showTutorial: Boolean = false,
     // Locale
-    hasChosenLanguage: Boolean = true
+    hasChosenLanguage: Boolean = true,
+    // Debug Logging
+    startDebugRecording: () -> Unit,
+    stopDebugRecording: () -> Unit,
+    startWaveModeling: () -> Unit
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
@@ -161,7 +170,7 @@ fun AppNavigator(
             }
         composable("camera") {
             android.util.Log.e("Tutorial", "Composing camera route")
-            val isTutorialResults = showOverlay && tutorialStep == 6
+            val isTutorialResults = showOverlay && tutorialStep == 8
             val displayImages = if (isTutorialResults) listOf(mockImage) else capturedImages
 
             CameraView(
@@ -227,12 +236,23 @@ fun AppNavigator(
                 onComputedPrecisionChange = { computedPrecision = it },
                 lastSolvedCount = lastSolvedCount,
                 onLastSolvedCountChange = { lastSolvedCount = it },
+                onIndividualFixesChange = {
+                    vm.individualFixes.clear()
+                    vm.individualFixes.addAll(it)
+                },
                 supportsManualExposure = supportsManualExposure,
                 startPitchAveraging = startPitchAveraging,
                 stopPitchAveraging = stopPitchAveraging,
                 markCalibrationUsed = markCalibrationUsed,
                 analysisJobs = vm.analysisJobs,
-                isRedTintMode = isRedTintMode
+                isRedTintMode = isRedTintMode,
+                sensorPipeline = sensorPipeline,
+                getCalibrationOffset = getCalibrationOffset,
+                getRollOffset = getRollOffset,
+                getOneshotCalibrationOffset = getOneshotCalibrationOffset,
+                getOneshotRollOffset = getOneshotRollOffset,
+                iso = vm.iso.value,
+                exposureTimeMs = vm.exposureTimeMs.value
             )
         }
         composable("settings") {
@@ -255,6 +275,7 @@ fun AppNavigator(
                 onSolverModeChange = { vm.saveSolverMode(it) },
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToCalibration = { navController.navigate("calibration") },
+                onNavigateToDebugSensors = { navController.navigate("debugSensors") },
                 onNavigateToHistory = { navController.navigate("history") },
                 onReplayTutorial = {
                     navController.navigate("tutorial") {
@@ -268,18 +289,61 @@ fun AppNavigator(
                 isRedTintMode = isRedTintMode,
                 onRedTintModeChange = { vm.saveRedTintMode(it) },
                 onResetSensorCal = { sensorCalibrator.resetCalibration() },
-                onResetHorizon = { saveCalibrationOffset(0.0) }
+                onResetHorizon = { saveCalibrationOffset(0.0, 0.0) },
+                onResetOneshot = { saveOneshotCalibrationOffset(0.0, 0.0) }
             )
         }
         composable("calibration") {
             CalibrationScreen(
                 onNavigateBack = { navController.popBackStack() },
                 getRawPitch = getRawPitch,
+                getRawRoll = getRawRoll,
                 onSaveCalibration = saveCalibrationOffset,
-                currentOffset = getCalibrationOffset(),
+                currentPitchOffset = getCalibrationOffset(),
+                currentRollOffset = getRollOffset(),
                 sensorCalibrator = sensorCalibrator,
                 sensorPipeline = sensorPipeline,
-                rawAccelState = rawAccelState
+                rawAccelState = rawAccelState,
+                solverMode = solverMode,
+                startPitchAveraging = startPitchAveraging,
+                stopPitchAveraging = stopPitchAveraging,
+                onSaveOneshotCalibration = saveOneshotCalibrationOffset,
+                currentOneshotPitchOffset = getOneshotCalibrationOffset(),
+                currentOneshotRollOffset = getOneshotRollOffset(),
+                iso = vm.iso.value,
+                exposureTimeMs = vm.exposureTimeMs.value,
+                supportsManualExposure = supportsManualExposure
+            )
+        }
+        composable("debugSensors") {
+            DebugSensorScreen(
+                rawAccel = vm.debugRawAccel.value,
+                rawGyro = vm.debugRawGyro.value,
+                kalmanCal = vm.debugKalmanCal.value,
+                kalmanRaw = vm.debugKalmanRaw.value,
+                androidGrav = vm.debugAndroidGrav.value,
+                isRecording = vm.isDebugRecording.value,
+                logFilePath = vm.debugLogFilePath.value,
+                isWaveRecording = vm.isWaveRecording.value,
+                waveRecordProgress = vm.waveRecordProgress.value,
+                waveModelResult = vm.waveModelResult.value,
+                iso = vm.iso.value,
+                onIsoChange = { vm.saveIso(it) },
+                exposureTimeMs = vm.exposureTimeMs.value,
+                onExposureTimeChange = { vm.saveExposureTimeMs(it) },
+                onStartRecording = startDebugRecording,
+                onStopRecording = stopDebugRecording,
+                onStartWaveModeling = startWaveModeling,
+                onOpenTrainingCapture = { navController.navigate("trainingCapture") },
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        composable("trainingCapture") {
+            TrainingCaptureScreen(
+                iso = vm.iso.value,
+                exposureTimeMs = vm.exposureTimeMs.value,
+                supportsManualExposure = supportsManualExposure,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
         composable("help") {
@@ -324,8 +388,8 @@ fun AppNavigator(
             }
         }
         composable("map") {
-            val isTutorialMap = showOverlay && (tutorialStep == 7 || tutorialStep == 8)
-            val displayImages = if (showOverlay && tutorialStep == 8) mockLopImages else if (isTutorialMap) emptyList() else capturedImages.toList()
+            val isTutorialMap = showOverlay && (tutorialStep == 9 || tutorialStep == 10)
+            val displayImages = if (showOverlay && tutorialStep == 10) mockLopImages else if (isTutorialMap) emptyList() else capturedImages.toList()
             val displayLat = if (isTutorialMap) 49.49 else computedLatitude ?: 0.0
             val displayLon = if (isTutorialMap) 0.11 else computedLongitude ?: 0.0
 
@@ -336,6 +400,7 @@ fun AppNavigator(
                 capturedImages = displayImages,
                 computedLatitude = displayLat,
                 computedLongitude = displayLon,
+                individualFixes = if (isTutorialMap) emptyList() else vm.individualFixes.toList(),
                 onImageClick = { image ->
                     viewerImageInfo = image
                     navController.navigate("imageViewer")

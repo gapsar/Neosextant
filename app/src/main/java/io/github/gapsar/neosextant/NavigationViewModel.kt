@@ -40,6 +40,9 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
 
     var isRedTintMode = mutableStateOf(prefs.getBoolean("is_red_tint_mode", false))
 
+    var exposureTimeMs = mutableStateOf(prefs.getInt("exposure_time_ms", 250))
+    var iso = mutableStateOf(prefs.getInt("iso", 3200))
+
 
     // --- Session state (survives config change, lost on process death) ---
     val capturedImages = mutableStateListOf<ImageData>()
@@ -47,6 +50,7 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
     var computedLatitude = mutableStateOf<Double?>(null)
     var computedLongitude = mutableStateOf<Double?>(null)
     var computedPrecision = mutableStateOf<Double?>(null)
+    val individualFixes = mutableStateListOf<Pair<Double, Double>>()
     var lastSolvedCount = mutableIntStateOf(0)
     var viewerImageInfo = mutableStateOf<ImageData?>(null)
     var historicalEntry = mutableStateOf<PositionEntry?>(null)
@@ -57,6 +61,20 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
 
     // M-01: Thread-safe analysis job tracker (moved from MainActivity)
     val analysisJobs = ConcurrentHashMap<Long, Job>()
+
+    // --- Debug Sensor Logger ---
+    var debugRawAccel = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")
+    var debugRawGyro = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")
+    var debugKalmanCal = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")
+    var debugKalmanRaw = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")
+    var debugAndroidGrav = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")
+    var isDebugRecording = mutableStateOf(false)
+    var debugLogFilePath = mutableStateOf("")
+
+    // --- Wave Modeling ---
+    var isWaveRecording = mutableStateOf(false)
+    var waveRecordProgress = mutableStateOf(0f)
+    var waveModelResult = mutableStateOf<String?>(null)
 
     // --- Persistence helpers ---
     private var saveJob: Job? = null
@@ -75,6 +93,8 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
                 .putString("pressure", pressure.value)
                 .putString("solver_mode", solverMode.value.name)
                 .putBoolean("is_red_tint_mode", isRedTintMode.value)
+                .putInt("exposure_time_ms", exposureTimeMs.value)
+                .putInt("iso", iso.value)
                 .apply()
         }
     }
@@ -121,6 +141,16 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
 
     fun saveRedTintMode(enabled: Boolean) {
         isRedTintMode.value = enabled
+        scheduleSave()
+    }
+
+    fun saveExposureTimeMs(value: Int) {
+        exposureTimeMs.value = value
+        scheduleSave()
+    }
+
+    fun saveIso(value: Int) {
+        iso.value = value
         scheduleSave()
     }
 
