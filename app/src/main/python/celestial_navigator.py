@@ -105,18 +105,43 @@ def _apply_exif_orientation(img):
         img.info.pop('exif', None)
     return img
 
+# Solver parameters come from self_calibration.active_params(): the shipped
+# Pixel 8a calibration (desktop optimizer v3 run, 2026-07-08: database
+# db_calib_fov48.69_mag7.0.npz, field replay 116/126 solved, 0 false
+# positives) until the on-device self-calibration adopts values for THIS
+# phone (FOV, database from the shipped ladder, lens distortion). See
+# self_calibration.py for the full design.
+import self_calibration
+
+T3_DB_NAME = None
+_T3_LOCK = threading.Lock()
+
+
+def _get_solver(db_name):
+    """Tetra3 instance for db_name, reloading when the on-device calibration
+    switches databases. Keeps the previous instance if loading fails."""
+    global T3_INSTANCE, T3_DB_NAME
+    with _T3_LOCK:
+        if T3_INSTANCE is not None and T3_DB_NAME == db_name:
+            return T3_INSTANCE
+        try:
+            t3 = tetra3.Tetra3(load_database=db_name)
+            if t3.has_database:
+                T3_INSTANCE, T3_DB_NAME = t3, db_name
+                print(f"Python: Tetra3 solver using database {db_name}")
+            else:
+                print(f"Python: database {db_name} failed to load; keeping "
+                      f"{T3_DB_NAME}")
+        except Exception as e_load:
+            print(f"Python: error loading database {db_name}: {e_load}; "
+                  f"keeping {T3_DB_NAME}")
+        return T3_INSTANCE
+
+
 try:
     print("Python: Initializing Tetra3 Astrometry Solver...")
-    # Database generated from hip_main for the NATIVE camera geometry
-    # (Pixel 8a main lens, full-res 3024x4032 portrait captures):
-    # max_fov=48.691, star_max_magnitude=7.0, verification_stars_per_fov=30,
-    # pattern_stars_per_fov=10, pattern_max_error=0.005.
-    # Chosen by the optimize_neosextant.py v3 run (2026-07-08), which searched
-    # a database grid with the app-identical cedar-cli detection path and
-    # astrometry.net ground truth; field replay 116/126 solved, 0 false
-    # positives (was db_native_fov48.6.npz at 103/126).
-    T3_INSTANCE = tetra3.Tetra3(load_database='db_calib_fov48.69_mag7.0.npz')
-    if T3_INSTANCE.has_database:
+    _get_solver(self_calibration.active_params()["db_name"])
+    if T3_INSTANCE is not None and T3_INSTANCE.has_database:
         print("Python: Tetra3 Solver initialized successfully.")
     else:
         INITIALIZATION_ERROR = "Tetra3 instance created but database FAILED to load."
@@ -486,9 +511,14 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         # tetra3 computes pattern indices BEFORE trimming to that limit and
         # then indexes out of bounds (see cedar-solve/LOCAL_PATCHES.md) —
         # capping here keeps that code path from ever being entered.
+        # Active calibration: shipped Pixel 8a values until the on-device
+        # self-calibration adopts values for this phone.
+        cal = self_calibration.active_params()
+        t3 = _get_solver(cal["db_name"]) or T3_INSTANCE
+
         max_centroids = 75
         try:
-            vspf = T3_INSTANCE.database_properties.get('verification_stars_per_fov')
+            vspf = t3.database_properties.get('verification_stars_per_fov')
             if vspf:
                 max_centroids = min(max_centroids, int(vspf))
         except Exception:
@@ -500,6 +530,16 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         centroids_list = [[float(c[0]), float(c[1])] for c in centroids]
 
         print(f"Python: Found {len(centroids)} centroids, using {len(centroids_list)} for solving.")
+
+        # Record raw (pre-undistortion) centroids for the background
+        # self-calibration, and start a pass if one is due. The pass runs in
+        # a daemon thread and never blocks this solve.
+        try:
+            self_calibration.record_sample(centroids_list, orig_width, orig_height)
+            if self_calibration.maybe_start_calibration():
+                print("Python: self-calibration pass started in background.")
+        except Exception as e_cal:
+            print(f"Python: self-calibration bookkeeping failed: {e_cal}")
 
         # Parse intrinsics
         try:
@@ -539,43 +579,43 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         else:
             first_solve_centroids = list(centroids_list)
 
-        # Step 0b: Frozen lens calibration (optimize_neosextant.py v3 run,
-        # 2026-07-08). Two-term radial undistortion fitted analytically from
-        # 960 matched stars; applied to centroids before solving, with
-        # tetra3's internal distortion left at 0. r is normalised by the
-        # focal length implied by CALIB_FOV_EST over the portrait width.
-        CALIB_K1 = 0.017625943890428975
-        CALIB_K2 = -0.09260975433568791
-        CALIB_FOV_EST = 45.82680502099258
-        f_cal = (orig_width / 2.0) / np.tan(np.radians(CALIB_FOV_EST) / 2.0)
+        # Step 0b: Frozen lens calibration. Two-term radial undistortion
+        # (k1/k2 from the active calibration: shipped Pixel 8a fit from 960
+        # matched stars, or this phone's own self-calibration), applied to
+        # centroids before solving with tetra3's internal distortion at 0.
+        # r is normalised by the focal length implied by the calibrated FOV
+        # over the portrait width.
+        f_cal = (orig_width / 2.0) / np.tan(np.radians(cal["fov_estimate"]) / 2.0)
         ccx, ccy = orig_width / 2.0, orig_height / 2.0
         undistorted = []
         for y, x in first_solve_centroids:
             xn = (x - ccx) / f_cal
             yn = (y - ccy) / f_cal
             r2 = xn * xn + yn * yn
-            d_scale = 1.0 + CALIB_K1 * r2 + CALIB_K2 * r2 * r2
+            d_scale = 1.0 + cal["k1"] * r2 + cal["k2"] * r2 * r2
             undistorted.append([ccy + f_cal * yn * d_scale,
                                 ccx + f_cal * xn * d_scale])
         first_solve_centroids = undistorted
 
         # Step 1: First (coarse) solve
-        # Full pipeline (db + sigma + undistortion + match params) frozen by
+        # Pipeline shape (db + sigma + undistortion + match params) frozen by
         # the optimize_neosextant.py v3 run (2026-07-08): detection via the
         # app-identical cedar-cli binary at full res, ground truth from
         # astrometry.net over 126 field frames. Field replay: 116/126 solved
         # (was 103), 83/84 truth frames correct, 0 false positives,
-        # p90 boresight error 0.098 deg. The loose match_threshold admits
-        # borderline-but-correct solves; the tight fov_max_error is the
-        # false-positive guard.
-        solution = T3_INSTANCE.solve_from_centroids(
+        # p90 boresight error 0.098 deg. fov/db/k1/k2 come from the active
+        # calibration; the match params are fixed (see self_calibration.py
+        # for why they are never tuned on-device). The loose match_threshold
+        # admits borderline-but-correct solves; the tight fov_max_error is
+        # the false-positive guard.
+        solution = t3.solve_from_centroids(
             first_solve_centroids,
             (orig_height, orig_width),
-            fov_estimate=45.82680502099258,
-            fov_max_error=0.6838895754335503,
-            pattern_checking_stars=10,
-            match_radius=0.005579387610925111,
-            match_threshold=0.006734320623386061,
+            fov_estimate=cal["fov_estimate"],
+            fov_max_error=cal["fov_max_error"],
+            pattern_checking_stars=self_calibration.MATCH_PARAMS["pattern_checking_stars"],
+            match_radius=self_calibration.MATCH_PARAMS["match_radius"],
+            match_threshold=self_calibration.MATCH_PARAMS["match_threshold"],
             solve_timeout=10000,
             return_matches=True
         )
