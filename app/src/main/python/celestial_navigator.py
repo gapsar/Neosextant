@@ -540,15 +540,23 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         # Step 1: First (coarse) solve
         # fov_estimate: effective horizontal (portrait-width) FOV of native
         # full-res captures, measured against solve-field WCS ground truth;
-        # solved FOVs cluster at 45.69-45.80 deg.
+        # solved FOVs cluster at 45.69-45.80 deg (fov_estimate below is a
+        # search-window centre, not the measured FOV; the +/-1.15 deg
+        # fov_max_error covers the true value).
+        # Params tuned 2026-07-08 by Optuna on this app's recorded centroids
+        # (126 field frames, astrometry.net ground truth): 106/126 solved vs
+        # 103 before, incl. 2 previously-failed frames verified correct;
+        # 0 false positives over 84 truth frames. The looser match_threshold
+        # admits borderline-but-correct solves; the tighter fov_max_error
+        # (was 4 deg) is the false-positive guard.
         solution = T3_INSTANCE.solve_from_centroids(
             first_solve_centroids,
             (orig_height, orig_width),
-            fov_estimate=45.72,
-            fov_max_error=4,
-            pattern_checking_stars=6,
-            match_radius=0.006444159991699473,
-            match_threshold=0.0001838658337161896,
+            fov_estimate=45.500438762510804,
+            fov_max_error=1.148055153687657,
+            pattern_checking_stars=12,
+            match_radius=0.007100380008063186,
+            match_threshold=0.007187117919564496,
             solve_timeout=10000,
             return_matches=True
         )
