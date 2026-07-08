@@ -109,11 +109,13 @@ try:
     print("Python: Initializing Tetra3 Astrometry Solver...")
     # Database generated from hip_main for the NATIVE camera geometry
     # (Pixel 8a main lens, full-res 3024x4032 portrait captures):
-    # max_fov=48.6, star_max_magnitude=7.0, verification_stars_per_fov=30,
-    # pattern_max_error=0.005, epoch_proper_motion=2026.5.
-    # The effective solved FOV across the portrait width is ~45.7 deg
-    # (validated 40/40 on native captures, 2026-07-06).
-    T3_INSTANCE = tetra3.Tetra3(load_database='db_native_fov48.6.npz')
+    # max_fov=48.691, star_max_magnitude=7.0, verification_stars_per_fov=30,
+    # pattern_stars_per_fov=10, pattern_max_error=0.005.
+    # Chosen by the optimize_neosextant.py v3 run (2026-07-08), which searched
+    # a database grid with the app-identical cedar-cli detection path and
+    # astrometry.net ground truth; field replay 116/126 solved, 0 false
+    # positives (was db_native_fov48.6.npz at 103/126).
+    T3_INSTANCE = tetra3.Tetra3(load_database='db_calib_fov48.69_mag7.0.npz')
     if T3_INSTANCE.has_database:
         print("Python: Tetra3 Solver initialized successfully.")
     else:
@@ -339,7 +341,7 @@ def detect_centroids_cli(image_path):
 
         cmd = [
             binary_path, "--input", image_path, "--output", output_path,
-            "--sigma", "4.713974740184074", "--binning", "2", "--hot-pixels", "true"
+            "--sigma", "4.305311087485253", "--binning", "2", "--hot-pixels", "true"
         ]
         print(f"Python: Running cedar_cli with args: {cmd}")
         result = subprocess.check_output(
@@ -537,26 +539,43 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         else:
             first_solve_centroids = list(centroids_list)
 
+        # Step 0b: Frozen lens calibration (optimize_neosextant.py v3 run,
+        # 2026-07-08). Two-term radial undistortion fitted analytically from
+        # 960 matched stars; applied to centroids before solving, with
+        # tetra3's internal distortion left at 0. r is normalised by the
+        # focal length implied by CALIB_FOV_EST over the portrait width.
+        CALIB_K1 = 0.017625943890428975
+        CALIB_K2 = -0.09260975433568791
+        CALIB_FOV_EST = 45.82680502099258
+        f_cal = (orig_width / 2.0) / np.tan(np.radians(CALIB_FOV_EST) / 2.0)
+        ccx, ccy = orig_width / 2.0, orig_height / 2.0
+        undistorted = []
+        for y, x in first_solve_centroids:
+            xn = (x - ccx) / f_cal
+            yn = (y - ccy) / f_cal
+            r2 = xn * xn + yn * yn
+            d_scale = 1.0 + CALIB_K1 * r2 + CALIB_K2 * r2 * r2
+            undistorted.append([ccy + f_cal * yn * d_scale,
+                                ccx + f_cal * xn * d_scale])
+        first_solve_centroids = undistorted
+
         # Step 1: First (coarse) solve
-        # fov_estimate: effective horizontal (portrait-width) FOV of native
-        # full-res captures, measured against solve-field WCS ground truth;
-        # solved FOVs cluster at 45.69-45.80 deg (fov_estimate below is a
-        # search-window centre, not the measured FOV; the +/-1.15 deg
-        # fov_max_error covers the true value).
-        # Params tuned 2026-07-08 by Optuna on this app's recorded centroids
-        # (126 field frames, astrometry.net ground truth): 106/126 solved vs
-        # 103 before, incl. 2 previously-failed frames verified correct;
-        # 0 false positives over 84 truth frames. The looser match_threshold
-        # admits borderline-but-correct solves; the tighter fov_max_error
-        # (was 4 deg) is the false-positive guard.
+        # Full pipeline (db + sigma + undistortion + match params) frozen by
+        # the optimize_neosextant.py v3 run (2026-07-08): detection via the
+        # app-identical cedar-cli binary at full res, ground truth from
+        # astrometry.net over 126 field frames. Field replay: 116/126 solved
+        # (was 103), 83/84 truth frames correct, 0 false positives,
+        # p90 boresight error 0.098 deg. The loose match_threshold admits
+        # borderline-but-correct solves; the tight fov_max_error is the
+        # false-positive guard.
         solution = T3_INSTANCE.solve_from_centroids(
             first_solve_centroids,
             (orig_height, orig_width),
-            fov_estimate=45.500438762510804,
-            fov_max_error=1.148055153687657,
-            pattern_checking_stars=12,
-            match_radius=0.007100380008063186,
-            match_threshold=0.007187117919564496,
+            fov_estimate=45.82680502099258,
+            fov_max_error=0.6838895754335503,
+            pattern_checking_stars=10,
+            match_radius=0.005579387610925111,
+            match_threshold=0.006734320623386061,
             solve_timeout=10000,
             return_matches=True
         )
