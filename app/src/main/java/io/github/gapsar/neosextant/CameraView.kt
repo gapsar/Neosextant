@@ -112,6 +112,11 @@ fun CameraView(
     getRollOffset: () -> Double,
     getOneshotCalibrationOffset: () -> Double,
     getOneshotRollOffset: () -> Double,
+    // Affine 1-Shot path: returns the affine-corrected up vector for the CURRENT
+    // shot if a validated affine calibration exists, else null (→ legacy offset
+    // path). Must be called right after stopPitchAveraging() so it reads the same
+    // shot's raw gravity snapshot.
+    getOneshotAffineUp: () -> SensorCalibrator.Vec3? = { null },
     iso: Int,
     exposureTimeMs: Int
 ) {
@@ -815,9 +820,16 @@ fun CameraView(
 
                                     if (avgGravityRaw != null) {
                                         if (solverMode == SolverMode.ONE_SHOT) {
-                                            val pitchOffset = getOneshotCalibrationOffset()
-                                            val rollOffset = getOneshotRollOffset()
-                                            gravityVector = sensorPipeline.applyOffsets(avgGravityRaw, pitchOffset, rollOffset)
+                                            // Prefer the affine model when a validated calibration exists;
+                                            // otherwise fall back to the legacy pitch/roll offset path.
+                                            val affineUp = getOneshotAffineUp()
+                                            gravityVector = if (affineUp != null) {
+                                                affineUp
+                                            } else {
+                                                val pitchOffset = getOneshotCalibrationOffset()
+                                                val rollOffset = getOneshotRollOffset()
+                                                sensorPipeline.applyOffsets(avgGravityRaw, pitchOffset, rollOffset)
+                                            }
                                             measuredHeight = 0.0
                                         } else {
                                             val pitchOffset = getCalibrationOffset()

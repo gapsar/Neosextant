@@ -60,7 +60,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // favours readings from the quietest moments over the last ~3 seconds.
     private data class StabilityWeightedSample(
         val gravity: SensorCalibrator.Vec3,
-        val gyroMagnitude: Float
+        val gyroMagnitude: Float,
+        // Raw-accelerometer gravity direction (Kalman-fused but NOT sphere-fit
+        // corrected) and the raw |accel| magnitude at capture. Retained only so
+        // the 1-Shot star calibration can fit a full affine model (A·a_raw + b);
+        // the primary averaging path uses `gravity` exactly as before.
+        val rawGravity: SensorCalibrator.Vec3 = SensorCalibrator.Vec3(0f, 0f, 0f),
+        val rawMagnitude: Float = 0f
     )
     private val rollingBuffer = java.util.ArrayDeque<StabilityWeightedSample>(ROLLING_BUFFER_SIZE)
     @Volatile private var currentGyroMagnitude: Float = 0f
@@ -123,6 +129,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             saveOneshotCalibrationOffset = ::saveOneshotCalibrationOffset,
                             getOneshotCalibrationOffset = ::getOneshotCalibrationOffset,
                             getOneshotRollOffset = ::getOneshotRollOffset,
+                            snapshotRawGravity = ::snapshotRawGravityForCalibration,
+                            getOneshotAffineUp = ::getOneshotAffineUp,
                             sensorCalibrator = sensorCalibrator,
                             sensorPipeline = sensorPipeline,
                             rawAccelState = currentRawAccel,
@@ -219,6 +227,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         saveOneshotCalibrationOffset = ::saveOneshotCalibrationOffset,
                         getOneshotCalibrationOffset = ::getOneshotCalibrationOffset,
                         getOneshotRollOffset = ::getOneshotRollOffset,
+                        snapshotRawGravity = ::snapshotRawGravityForCalibration,
+                        getOneshotAffineUp = ::getOneshotAffineUp,
                         sensorCalibrator = sensorCalibrator,
                         sensorPipeline = sensorPipeline,
                         rawAccelState = currentRawAccel,
@@ -409,10 +419,20 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     // Always maintain the rolling buffer (even outside averaging)
                     // so that 3 seconds of history is available the instant the
                     // shutter fires.
+                    val rawAccelMag = sqrt(
+                        lastRawAccel[0] * lastRawAccel[0] +
+                        lastRawAccel[1] * lastRawAccel[1] +
+                        lastRawAccel[2] * lastRawAccel[2]
+                    )
                     synchronized(rollingBuffer) {
                         if (rollingBuffer.size >= ROLLING_BUFFER_SIZE) rollingBuffer.poll()
                         rollingBuffer.add(
-                            StabilityWeightedSample(fusedGravity, currentGyroMagnitude)
+                            StabilityWeightedSample(
+                                fusedGravity,
+                                currentGyroMagnitude,
+                                rawFusedGravity,
+                                rawAccelMag
+                            )
                         )
                     }
 
@@ -558,6 +578,102 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         Log.d("MainActivity", "Stopped pitch averaging. Gyro-gated avg from ${snapshot.size} samples, totalWeight=%.2f".format(totalWeight))
         return avgGravity
+    }
+
+    /** Raw (non-sphere-fit) gravity snapshot used only by affine 1-Shot calibration. */
+    data class RawGravitySnapshot(
+        val direction: SensorCalibrator.Vec3, // unit vector, raw-accel Kalman-fused
+        val magnitude: Double                 // weighted mean of raw |accel| (m/s²)
+    )
+
+    /**
+     * Companion to [stopPitchAveraging] for the affine 1-Shot calibration only.
+     * Applies the identical gyro-gated weighting over the identical recent window,
+     * but to the RAW accelerometer direction/magnitude retained in the buffer.
+     * Read-only over the rolling buffer; does not alter any averaging state, so it
+     * is safe to call immediately after stopPitchAveraging() on the same shot.
+     */
+    fun snapshotRawGravityForCalibration(): RawGravitySnapshot? {
+        val snapshot: List<StabilityWeightedSample>
+        synchronized(rollingBuffer) {
+            val allSamples = rollingBuffer.toList()
+            val GRAVITY_WINDOW_SAMPLES = 25
+            snapshot = if (allSamples.size > GRAVITY_WINDOW_SAMPLES) {
+                allSamples.takeLast(GRAVITY_WINDOW_SAMPLES)
+            } else {
+                allSamples
+            }
+        }
+        if (snapshot.isEmpty()) return null
+
+        var totalWeight = 0.0
+        var wx = 0.0; var wy = 0.0; var wz = 0.0; var wMag = 0.0
+        for (sample in snapshot) {
+            val w = exp(-GYRO_WEIGHT_K * sample.gyroMagnitude * sample.gyroMagnitude)
+            totalWeight += w
+            wx += w * sample.rawGravity.x
+            wy += w * sample.rawGravity.y
+            wz += w * sample.rawGravity.z
+            wMag += w * sample.rawMagnitude
+        }
+
+        val dir: SensorCalibrator.Vec3
+        val mag: Double
+        if (totalWeight < 1e-9) {
+            dir = SensorCalibrator.Vec3(
+                snapshot.map { it.rawGravity.x.toDouble() }.average().toFloat(),
+                snapshot.map { it.rawGravity.y.toDouble() }.average().toFloat(),
+                snapshot.map { it.rawGravity.z.toDouble() }.average().toFloat()
+            )
+            mag = snapshot.map { it.rawMagnitude.toDouble() }.average()
+        } else {
+            dir = SensorCalibrator.Vec3(
+                (wx / totalWeight).toFloat(),
+                (wy / totalWeight).toFloat(),
+                (wz / totalWeight).toFloat()
+            )
+            mag = wMag / totalWeight
+        }
+        // rawGravity is already a unit vector from the fusion filter; if a legacy
+        // sample slipped through un-normalized, guard the direction here.
+        val dMag = dir.magnitude()
+        val unitDir = if (dMag > 1e-6f) {
+            SensorCalibrator.Vec3(dir.x / dMag, dir.y / dMag, dir.z / dMag)
+        } else return null
+        return RawGravitySnapshot(unitDir, mag)
+    }
+
+    /**
+     * Affine-corrected "up" for the current 1-Shot shot, or null if no validated
+     * affine calibration exists or the result fails its runtime sanity checks
+     * (caller then uses the legacy offset path).
+     * Reconstructs the true raw acceleration a = mag · direction and applies
+     * up = normalize(A · a + b). Call right after stopPitchAveraging().
+     */
+    fun getOneshotAffineUp(): SensorCalibrator.Vec3? {
+        if (!sensorCalibrator.hasValidAffine()) return null
+        val snap = snapshotRawGravityForCalibration() ?: return null
+        val aRaw = SensorCalibrator.Vec3(
+            (snap.direction.x * snap.magnitude).toFloat(),
+            (snap.direction.y * snap.magnitude).toFloat(),
+            (snap.direction.z * snap.magnitude).toFloat()
+        )
+        val affineUp = sensorCalibrator.applyAffine(aRaw) ?: return null
+
+        // The affine model is applied to EVERY subsequent fix once adopted, at
+        // attitudes the calibration session may never have covered. It should
+        // improve on the legacy path by a degree or two, not disagree wildly —
+        // a large gap means the model is broken, so fall back rather than
+        // silently steer the fix tens of miles off.
+        val disagreement = sensorCalibrator.affineVsLegacyDeg(aRaw)
+        if (disagreement != null &&
+            disagreement > SensorCalibrator.MAX_AFFINE_LEGACY_DISAGREEMENT_DEG) {
+            Log.w("MainActivity",
+                "Affine disagrees with legacy by %.1f° (> %.1f°); using legacy path"
+                    .format(disagreement, SensorCalibrator.MAX_AFFINE_LEGACY_DISAGREEMENT_DEG))
+            return null
+        }
+        return affineUp
     }
 
     // Calibration Persistence

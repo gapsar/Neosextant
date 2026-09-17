@@ -30,6 +30,34 @@ class SensorCalibrator(context: Context) {
         val scale: Vec3 = Vec3(1f, 1f, 1f)
     )
 
+    /**
+     * Full affine accelerometer model:  up = normalize(A · a_raw + b).
+     *
+     * A (row-major 3×3) absorbs the camera↔IMU mounting rotation, per-axis
+     * scale, and cross-axis coupling; b is the bias. This is fit from the
+     * 1-Shot star calibration across multiple attitudes (see
+     * fit_affine_calibration in Python) and is used ONLY by the 1-Shot solve
+     * path when [valid] is true. When invalid, the legacy sphere-fit + pitch/
+     * roll offset path is used unchanged.
+     */
+    data class AffineParams(
+        val a: FloatArray = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f), // row-major
+        val b: Vec3 = Vec3(0f, 0f, 0f),
+        val valid: Boolean = false
+    ) {
+        // A data class holding a FloatArray gets reference-based equals/hashCode,
+        // so two identical calibrations would compare unequal — which silently
+        // breaks any Compose recomposition keyed on this value. Compare contents.
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is AffineParams) return false
+            return valid == other.valid && b == other.b && a.contentEquals(other.a)
+        }
+
+        override fun hashCode(): Int =
+            (a.contentHashCode() * 31 + b.hashCode()) * 31 + valid.hashCode()
+    }
+
     companion object {
         private const val PREFS_NAME = "NeosextantSensors"
         private const val KEY_BIAS_X = "cal_bias_x"
@@ -42,20 +70,46 @@ class SensorCalibrator(context: Context) {
         private const val KEY_USAGE_COUNT = "cal_usage_count"
         private const val KEY_LAST_CAL_TIME = "cal_last_timestamp"
 
+        // Affine 1-Shot calibration (12 params + validity flag)
+        private const val KEY_AFFINE_VALID = "cal_affine_valid"
+        private const val KEY_AFFINE_A_PREFIX = "cal_affine_a_" // a_0..a_8
+        private const val KEY_AFFINE_B_PREFIX = "cal_affine_b_" // b_0..b_2
+
         private const val MAX_USES_BEFORE_WARNING = 5
         private const val MAX_DAYS_BEFORE_WARNING = 10
+
+        // Runtime sanity bounds on the affine output magnitude (m/s²). Gravity
+        // is 9.78–9.83 worldwide; this allows generous headroom for residual
+        // accelerometer error while still catching a broken model.
+        private const val MIN_AFFINE_MAGNITUDE = 8.5f
+        private const val MAX_AFFINE_MAGNITUDE = 11.0f
+
+        /** Affine vs legacy disagreement beyond this means the fit is broken,
+         *  not merely better-calibrated. */
+        const val MAX_AFFINE_LEGACY_DISAGREEMENT_DEG = 10.0
     }
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private var params: CalibrationParams = loadParams()
+    private var affineParams: AffineParams = loadAffineParams()
 
     // Temporary storage for the 8 data points during active calibration
     private val recordedPoints = mutableListOf<Vec3>()
 
     fun getParams() = params
 
+    fun getAffineParams() = affineParams
+
+    fun hasValidAffine() = affineParams.valid
+
     fun resetCalibration() {
         saveParams(CalibrationParams())
+    }
+
+    /** Clears the affine 1-Shot calibration, reverting the 1-Shot solve path to
+     *  the legacy sphere-fit + pitch/roll offset behavior. */
+    fun resetAffineCalibration() {
+        saveAffineParams(AffineParams())
     }
 
     // --- Persistence ---
@@ -91,6 +145,36 @@ class SensorCalibrator(context: Context) {
             apply()
         }
         Log.d("SensorCalibrator", "Saved new calibration: $newParams")
+    }
+
+    // --- Affine Persistence ---
+
+    private fun loadAffineParams(): AffineParams {
+        val valid = prefs.getBoolean(KEY_AFFINE_VALID, false)
+        if (!valid) return AffineParams()
+        val a = FloatArray(9) { i -> prefs.getFloat("$KEY_AFFINE_A_PREFIX$i", if (i % 4 == 0) 1f else 0f) }
+        val b = Vec3(
+            prefs.getFloat("${KEY_AFFINE_B_PREFIX}0", 0f),
+            prefs.getFloat("${KEY_AFFINE_B_PREFIX}1", 0f),
+            prefs.getFloat("${KEY_AFFINE_B_PREFIX}2", 0f)
+        )
+        return AffineParams(a, b, true)
+    }
+
+    fun saveAffineParams(newParams: AffineParams) {
+        affineParams = newParams
+        prefs.edit().apply {
+            putBoolean(KEY_AFFINE_VALID, newParams.valid)
+            for (i in 0 until 9) putFloat("$KEY_AFFINE_A_PREFIX$i", newParams.a[i])
+            putFloat("${KEY_AFFINE_B_PREFIX}0", newParams.b.x)
+            putFloat("${KEY_AFFINE_B_PREFIX}1", newParams.b.y)
+            putFloat("${KEY_AFFINE_B_PREFIX}2", newParams.b.z)
+            // An affine fit is a fresh calibration — reset staleness tracking too.
+            putInt(KEY_USAGE_COUNT, 0)
+            putLong(KEY_LAST_CAL_TIME, System.currentTimeMillis())
+            apply()
+        }
+        Log.d("SensorCalibrator", "Saved affine calibration: valid=${newParams.valid}")
     }
 
     // --- Usage Tracking & Notifications ---
@@ -304,5 +388,51 @@ class SensorCalibrator(context: Context) {
         // (Raw - Bias) * Scale
         val centered = raw - params.bias
         return centered * params.scale
+    }
+
+    /**
+     * Apply the affine model to a raw acceleration vector:
+     *   up = normalize(A · a_raw + b)
+     *
+     * @param aRaw The raw acceleration vector in m/s² (direction × magnitude),
+     *             NOT sphere-fit corrected — the affine model subsumes that.
+     * @return The gravity/up unit direction in the sensor frame, or null if the
+     *         result fails the runtime sanity check (see [affineSanityFailure]).
+     */
+    fun applyAffine(aRaw: Vec3): Vec3? {
+        val a = affineParams.a
+        val corrected = Vec3(
+            a[0] * aRaw.x + a[1] * aRaw.y + a[2] * aRaw.z + affineParams.b.x,
+            a[3] * aRaw.x + a[4] * aRaw.y + a[5] * aRaw.z + affineParams.b.y,
+            a[6] * aRaw.x + a[7] * aRaw.y + a[8] * aRaw.z + affineParams.b.z
+        )
+        val mag = corrected.magnitude()
+        if (mag <= 1e-6f) return null
+
+        // Runtime sanity: a healthy affine model maps a real gravity reading back
+        // onto something close to 1 g. A fit validated at calibration time can
+        // still be wrong for an attitude far outside the session's coverage, and
+        // the model is otherwise applied unconditionally to every future fix.
+        if (mag < MIN_AFFINE_MAGNITUDE || mag > MAX_AFFINE_MAGNITUDE) {
+            Log.w("SensorCalibrator",
+                "Affine output |A*a+b| = $mag m/s² outside sane range; rejecting")
+            return null
+        }
+        return Vec3(corrected.x / mag, corrected.y / mag, corrected.z / mag)
+    }
+
+    /**
+     * Angle in degrees between the affine and legacy (sphere-fit) gravity
+     * directions for the same raw reading. The affine model is *expected* to
+     * differ by a degree or two — that is the point of it — but a large
+     * disagreement means the calibration is broken, not merely better.
+     */
+    fun affineVsLegacyDeg(aRaw: Vec3): Double? {
+        val affine = applyAffine(aRaw) ?: return null
+        val legacy = applyCalibration(aRaw)
+        val lm = legacy.magnitude()
+        if (lm <= 1e-6f) return null
+        val dot = (affine.x * legacy.x + affine.y * legacy.y + affine.z * legacy.z) / lm
+        return Math.toDegrees(kotlin.math.acos(dot.coerceIn(-1f, 1f).toDouble()))
     }
 }

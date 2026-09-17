@@ -1769,6 +1769,347 @@ def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lo
         return json.dumps({"error": error_msg})
 
 
+# -----------------------------------------------------------------------------
+# Affine 1-Shot calibration (full 3x3 A + bias b)
+#
+# The existing solve_calibration_offsets() collapses each shot into a 2-param
+# pitch/roll rotation, which cannot represent cross-axis coupling or the
+# camera<->IMU mounting rotation (orientation-dependent errors). The two
+# functions below instead retain the raw (measured, expected) gravity pairs
+# across several attitudes and fit a full affine model:
+#
+#     up_sensor  ~=  A . a_raw  +  b        (A: 3x3, b: 3-vector, 12 params)
+#
+# solve_calibration_pair() returns ONLY the expected gravity direction in the
+# sensor frame for one shot (identical geometry to solve_calibration_offsets);
+# the measured raw direction + magnitude are supplied by the app. The app
+# accumulates these pairs and calls fit_affine_calibration() once enough
+# attitude spread is collected. Neither function touches the legacy path.
+# -----------------------------------------------------------------------------
+
+def _expected_gravity_sensor(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso):
+    """Expected gravity (down) unit vector in the sensor frame. Shared geometry
+    with solve_calibration_offsets — kept identical on purpose."""
+    import numpy as np
+    from astropy.time import Time
+
+    t = Time(time_iso)
+    era_deg = t.earth_rotation_angle('tio').deg
+    lst_deg = (lon_deg + era_deg) % 360
+
+    lat_rad = np.radians(lat_deg)
+    lst_rad = np.radians(lst_deg)
+    zenith_icrs = np.array([
+        np.cos(lat_rad) * np.cos(lst_rad),
+        np.cos(lat_rad) * np.sin(lst_rad),
+        np.sin(lat_rad)
+    ])
+
+    ra_rad = np.radians(float(ra_deg))
+    dec_rad = np.radians(float(dec_deg))
+    roll_rad = np.radians(float(roll_deg))
+
+    cos_ra, sin_ra = np.cos(ra_rad), np.sin(ra_rad)
+    cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
+    cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
+
+    b_axis = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
+    E = np.array([-sin_ra, cos_ra, 0.0])
+    N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
+
+    row1 = cos_roll * E + sin_roll * N
+    row2 = -sin_roll * E + cos_roll * N
+    R = np.array([b_axis, row1, row2])
+
+    v_cam_exp = R @ zenith_icrs
+
+    # Camera->sensor mapping, identical to solve_calibration_offsets:
+    #   v_cam = [-gz, -gx, gy]  ->  gx = -v_cam[1], gy = v_cam[2], gz = -v_cam[0]
+    v_exp = np.array([-v_cam_exp[1], v_cam_exp[2], -v_cam_exp[0]])
+    n = np.linalg.norm(v_exp)
+    if n > 1e-6:
+        v_exp = v_exp / n
+    return v_exp
+
+
+def solve_calibration_pair(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso):
+    """Returns the expected gravity direction (sensor frame, unit) for one
+    1-Shot capture, so the app can pair it with the measured raw gravity for an
+    affine fit. Does not solve or collapse anything."""
+    try:
+        v_exp = _expected_gravity_sensor(
+            ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso
+        )
+        return json.dumps({
+            "exp": [float(v_exp[0]), float(v_exp[1]), float(v_exp[2])],
+            "error": None
+        })
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in solve_calibration_pair: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
+
+
+G_STANDARD = 9.807  # m/s^2, target magnitude for the affine fit
+
+# ---------------------------------------------------------------------------
+# Acceptance gates for the affine fit.
+#
+# Calibrated by simulation over a realistic session model (n distinct attitudes,
+# several shots each with ~2 deg hand jitter, 0.004 m/s^2 accel noise, 0.05 deg
+# star-solve noise on the expected direction), scored against a held-out set
+# covering the full attitude sphere. Findings:
+#
+#   * In-sample RMS is WORTHLESS as a quality signal: 0.03-0.06 deg whether the
+#     true held-out error is 0.07 deg or 17.9 deg. A 12-parameter model fits 6
+#     points almost exactly no matter how bad it is.
+#   * Leave-one-SAMPLE-out is nearly as bad: it never exceeded 0.084 deg across
+#     the whole sweep, because the held-out shot's own cluster is still in the
+#     training set. Tagging every shot as its own group silently degrades
+#     leave-one-group-out into exactly this.
+#   * What does predict truth is the CONDITIONING of the regressor together with
+#     the number of genuinely distinct attitudes, plus leave-one-CLUSTER-out.
+#
+# Correlation of each diagnostic with true held-out error (log space, 420 fits):
+#     cond        +0.92     attitude spread  -0.91
+#     n_clusters  -0.80     leave-one-cluster-out  +0.30
+#     n_pairs     -0.21     IN-SAMPLE RMS    -0.05   <- no signal at all
+#
+# Thresholds were tuned on 420 simulated sessions and then validated on 1008
+# sessions from independent seeds: 138 admitted, mean true error 0.053 deg
+# (3.2 nmi), max 0.167 deg, none above 0.20 deg.
+#
+# What this demands of a calibration session, measured:
+#     spread  shots   pass rate   true error
+#      15-45 deg  any      0%       0.25-4.3 deg   (correctly always rejected)
+#      60 deg     24+     14-36%    0.14-0.20 deg
+#      90 deg     24+     79-86%    0.06-0.09 deg  <- the target
+# i.e. ~6-8 genuinely different tilts spanning as wide a range as possible,
+# 3-4 shots each. Six shots at one attitude — the original requirement — cannot
+# produce a usable 12-parameter fit at any threshold.
+#
+# Gates are deliberately conservative: a rejected fit costs the user nothing
+# (the legacy pitch/roll offset path still runs, ~20 nmi), while an accepted bad
+# fit is catastrophic — 1 deg of vertical error is 60 nmi of position error, so
+# a bad affine model is far worse than none.
+# ---------------------------------------------------------------------------
+AFFINE_MIN_PAIRS = 24          # shots required before a fit is even attempted
+AFFINE_MIN_CLUSTERS = 4        # distinct attitudes required (hard floor)
+AFFINE_CLUSTER_TOL_DEG = 15.0  # shots within this angle are the same attitude
+AFFINE_MAX_COND = 60.0         # regressor condition number — the primary gate
+AFFINE_MAX_LOCO_DEG = 0.20     # leave-one-cluster-out RMS direction error
+AFFINE_MAX_BIAS = 0.5          # m/s^2
+AFFINE_MAX_GAIN_SPREAD = 0.15  # ~15% spread across the diagonal of A
+
+
+def _cluster_attitudes(dirs, tol_deg=AFFINE_CLUSTER_TOL_DEG):
+    """Greedy angular clustering of measured gravity directions. Returns a
+    per-sample cluster label. Derived from the DATA, never from UI bookkeeping:
+    six shots the user thought were 'different attitudes' can easily be one."""
+    import numpy as np
+    centres = []
+    labels = []
+    for u in dirs:
+        best_d, best_i = 1e9, -1
+        for i, c in enumerate(centres):
+            d = np.degrees(np.arccos(np.clip(float(np.dot(u, c)), -1.0, 1.0)))
+            if d < best_d:
+                best_d, best_i = d, i
+        if best_i >= 0 and best_d <= tol_deg:
+            labels.append(best_i)
+        else:
+            centres.append(u)
+            labels.append(len(centres) - 1)
+    return labels, centres
+
+
+def fit_affine_calibration(pairs_json):
+    """
+    Fit up_sensor ~= A . a_raw + b from a set of (measured, expected) pairs.
+
+    Input JSON: list of objects, each:
+        {"meas": [x,y,z],   # raw-accel gravity DIRECTION (unit), sensor frame
+         "mag":  float,     # raw |accel| at that shot (m/s^2)
+         "exp":  [x,y,z]}   # expected gravity DIRECTION (unit), sensor frame
+    Any "group" field is IGNORED: attitude grouping is derived from the measured
+    directions themselves (see _cluster_attitudes).
+
+    The true raw acceleration used as the regressor is a = mag * meas_unit, so
+    per-axis gain is observable. The target is G_STANDARD * exp_unit, so the fit
+    is constrained in BOTH direction and magnitude (this is what stops the gain
+    terms from drifting). Each output row is an independent 4-param linear LSQ:
+        [a_x a_y a_z 1] . [A_i0 A_i1 A_i2 b_i]^T = G_STANDARD * exp_i
+
+    Returns A (row-major 9), b (3), the diagnostics the gates are based on, a
+    `healthy` verdict, and `reject_reasons` explaining any refusal so the UI can
+    tell the user what to do differently.
+    """
+    try:
+        import numpy as np
+
+        pairs = json.loads(pairs_json)
+        if not isinstance(pairs, list) or len(pairs) < AFFINE_MIN_PAIRS:
+            return json.dumps({
+                "healthy": False,
+                "n_pairs": len(pairs) if isinstance(pairs, list) else 0,
+                "reject_reasons": [
+                    "need %d shots, have %d" % (
+                        AFFINE_MIN_PAIRS,
+                        len(pairs) if isinstance(pairs, list) else 0)
+                ],
+                "error": None,
+            })
+
+        A_reg = []   # regressor rows [ax, ay, az, 1]
+        Y = []       # target rows    G * exp_unit
+        meas_dirs = []
+        for p in pairs:
+            m = np.array(p["meas"], dtype=float)
+            mn = np.linalg.norm(m)
+            if mn > 1e-6:
+                m = m / mn
+            mag = float(p.get("mag", G_STANDARD))
+            if mag < 1e-3:
+                mag = G_STANDARD
+            a = m * mag
+            e = np.array(p["exp"], dtype=float)
+            en = np.linalg.norm(e)
+            if en > 1e-6:
+                e = e / en
+            A_reg.append([a[0], a[1], a[2], 1.0])
+            Y.append(e * G_STANDARD)
+            meas_dirs.append(m)
+
+        A_reg = np.array(A_reg)
+        Y = np.array(Y)
+
+        def _fit(rows):
+            # Solve the 4-param linear system for each of the 3 output axes.
+            M = A_reg[rows]
+            params = np.zeros((3, 4))
+            for axis in range(3):
+                sol, _res, _rank, _sv = np.linalg.lstsq(M, Y[rows][:, axis], rcond=None)
+                params[axis] = sol
+            A = params[:, :3]
+            b = params[:, 3]
+            return A, b
+
+        def _dir_err_deg(A, b, rows):
+            errs = []
+            for i in rows:
+                a = A_reg[i][:3]
+                pred = A @ a + b
+                pn = np.linalg.norm(pred)
+                if pn < 1e-9:
+                    continue
+                pred_u = pred / pn
+                exp_u = Y[i] / np.linalg.norm(Y[i])
+                dot = np.clip(np.dot(pred_u, exp_u), -1.0, 1.0)
+                errs.append(np.degrees(np.arccos(dot)))
+            return float(np.sqrt(np.mean(np.square(errs)))) if errs else float("nan")
+
+        all_rows = list(range(len(A_reg)))
+        A_full, b_full = _fit(all_rows)
+        in_sample_rms = _dir_err_deg(A_full, b_full, all_rows)
+
+        # --- Attitude clustering, from the data ---
+        labels, centres = _cluster_attitudes(meas_dirs)
+        n_clusters = len(centres)
+
+        # Widest angle between any two attitude centres: the headline number for
+        # telling the user whether they actually moved the phone around.
+        spread_deg = 0.0
+        for i in range(len(centres)):
+            for j in range(i + 1, len(centres)):
+                d = np.degrees(np.arccos(
+                    np.clip(float(np.dot(centres[i], centres[j])), -1.0, 1.0)))
+                spread_deg = max(spread_deg, d)
+
+        # --- Conditioning of the regressor ---
+        # If every shot was taken at nearly the same attitude, the columns
+        # [ax ay az 1] are nearly collinear. lstsq then returns a minimum-norm
+        # solution with NO warning and a near-zero in-sample residual, while the
+        # model is meaningless anywhere else on the sphere. This is the single
+        # most likely way to end up with a confidently wrong calibration.
+        cond = float(np.linalg.cond(A_reg))
+
+        # --- Leave-one-CLUSTER-out validation ---
+        # Whole attitudes are held out, so the fit gets no help from neighbours
+        # of the held-out shot. This is the only validation here that responds
+        # to a badly-spread session.
+        loco_errs = []
+        for g in range(n_clusters):
+            train = [i for i in all_rows if labels[i] != g]
+            test = [i for i in all_rows if labels[i] == g]
+            # 4 params per output axis; require real overdetermination
+            if len(train) < 8 or not test:
+                continue
+            A_t, b_t = _fit(train)
+            e = _dir_err_deg(A_t, b_t, test)
+            if e == e:  # not NaN
+                loco_errs.append(e)
+        loco_rms = (float(np.sqrt(np.mean(np.square(loco_errs))))
+                    if loco_errs else float("nan"))
+
+        # --- Health metrics ---
+        gains = np.abs(np.diag(A_full))
+        gain_spread = float(gains.max() - gains.min()) if gains.size else 0.0
+        bias_mag = float(np.linalg.norm(b_full))
+
+        # --- Gates ---
+        reasons = []
+        if len(all_rows) < AFFINE_MIN_PAIRS:
+            reasons.append("need %d shots, have %d"
+                           % (AFFINE_MIN_PAIRS, len(all_rows)))
+        if n_clusters < AFFINE_MIN_CLUSTERS:
+            reasons.append("need %d distinct attitudes, have %d (vary the phone's "
+                           "tilt more between shots)"
+                           % (AFFINE_MIN_CLUSTERS, n_clusters))
+        if not (cond == cond) or cond > AFFINE_MAX_COND:
+            reasons.append("attitudes too alike (conditioning %.0f > %.0f)"
+                           % (cond, AFFINE_MAX_COND))
+        if not (loco_rms == loco_rms):
+            reasons.append("could not validate (too few attitudes to hold one out)")
+        elif loco_rms > AFFINE_MAX_LOCO_DEG:
+            reasons.append("held-out error %.2f deg > %.2f deg"
+                           % (loco_rms, AFFINE_MAX_LOCO_DEG))
+        if bias_mag >= AFFINE_MAX_BIAS:
+            reasons.append("bias %.2f m/s2 implausible" % bias_mag)
+        if gain_spread >= AFFINE_MAX_GAIN_SPREAD:
+            reasons.append("gain spread %.3f implausible" % gain_spread)
+
+        healthy = not reasons
+
+        print("Python: affine fit n=%d clusters=%d spread=%.1f deg cond=%.0f "
+              "in_sample=%.3f LOCO=%.3f -> %s"
+              % (len(all_rows), n_clusters, spread_deg, cond, in_sample_rms,
+                 loco_rms, "ACCEPTED" if healthy else "REJECTED (%s)"
+                 % "; ".join(reasons)))
+
+        return json.dumps({
+            "A": [float(x) for x in A_full.flatten()],  # row-major 3x3
+            "b": [float(x) for x in b_full],
+            "in_sample_rms_deg": in_sample_rms,
+            "loco_rms_deg": loco_rms,
+            "cond": cond,
+            "attitude_spread_deg": spread_deg,
+            "gain_spread": gain_spread,
+            "bias_mag": bias_mag,
+            "n_pairs": len(all_rows),
+            "n_clusters": n_clusters,
+            "healthy": bool(healthy),
+            "reject_reasons": reasons,
+            "error": None
+        })
+
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in fit_affine_calibration: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
+
+
 # =============================================================================
 # SECTION 5: SENSOR WAVE MODELING
 # =============================================================================

@@ -40,6 +40,9 @@ fun AppNavigator(
     saveOneshotCalibrationOffset: (Double, Double) -> Unit,
     getOneshotCalibrationOffset: () -> Double,
     getOneshotRollOffset: () -> Double,
+    // Affine 1-Shot calibration
+    snapshotRawGravity: () -> MainActivity.RawGravitySnapshot? = { null },
+    getOneshotAffineUp: () -> SensorCalibrator.Vec3? = { null },
     sensorCalibrator: SensorCalibrator,
     sensorPipeline: SensorPipeline,
     rawAccelState: State<SensorCalibrator.Vec3>,
@@ -251,6 +254,7 @@ fun AppNavigator(
                 getRollOffset = getRollOffset,
                 getOneshotCalibrationOffset = getOneshotCalibrationOffset,
                 getOneshotRollOffset = getOneshotRollOffset,
+                getOneshotAffineUp = getOneshotAffineUp,
                 iso = vm.iso.value,
                 exposureTimeMs = vm.exposureTimeMs.value
             )
@@ -307,6 +311,7 @@ fun AppNavigator(
                 solverMode = solverMode,
                 startPitchAveraging = startPitchAveraging,
                 stopPitchAveraging = stopPitchAveraging,
+                snapshotRawGravity = snapshotRawGravity,
                 onSaveOneshotCalibration = saveOneshotCalibrationOffset,
                 currentOneshotPitchOffset = getOneshotCalibrationOffset(),
                 currentOneshotRollOffset = getOneshotRollOffset(),
