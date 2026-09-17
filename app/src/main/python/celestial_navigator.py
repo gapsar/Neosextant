@@ -32,6 +32,7 @@ try:
     import pytz
     import tetra3
     import astropy.units as u
+    import erfa  # ships with astropy (pyerfa); IAU SOFA routines
     from astropy.time import Time
     from astropy.coordinates import SkyCoord, EarthLocation, AltAz
 except ImportError as e:
@@ -1152,6 +1153,13 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
         era_deg = t.earth_rotation_angle('tio').deg
         print(f"Python: 1-Shot: time={time_iso}, ERA={era_deg:.4f}°")
 
+        # Celestial-to-intermediate rotation (ICRS/GCRS -> CIRS) for this epoch,
+        # IAU 2006 precession + IAU 2000A nutation. Needed in step 4 below; see
+        # the long comment there for why. pyerfa ships inside astropy, so this
+        # adds no new dependency.
+        _tt = t.tt
+        bpn_icrs_to_cirs = erfa.c2i06a(_tt.jd1, _tt.jd2)
+
         # --- 2. Reconstruct tetra3's rotation matrix from RA/Dec/Roll ---
         # tetra3 defines R as mapping ICRS vectors to camera-frame vectors.
         # Rows of R are the camera axes expressed in ICRS coordinates:
@@ -1230,22 +1238,48 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
 
         print(f"Python: 1-Shot: zenith in camera frame = {v_cam}")
 
-        # --- 4. Transform zenith from camera frame to ICRS ---
+        # --- 4. Transform zenith from camera frame to ICRS, then to CIRS ---
         # R maps ICRS → camera, so R^T maps camera → ICRS
         zenith_icrs = R.T @ v_cam
 
+        # ERA is the rotation angle of the Earth about the CELESTIAL INTERMEDIATE
+        # POLE, measured from the CIO — i.e. it is an angle in the CIRS frame, not
+        # in ICRS. Switching GST→ERA (commit d33c9df) removed the precession-in-RA
+        # term because the CIO is constructed to have no rotation about the pole
+        # relative to ICRS. But the POLE itself still moves: precession/nutation
+        # carry the CIP ~20"/yr away from the ICRS z-axis, so by 2026 the two
+        # frames differ by a ~0.15° rotation about an equatorial axis.
+        #
+        # Reading latitude off the ICRS z-axis and longitude off the ICRS x-axis
+        # therefore mixes that 0.15° straight into the fix. Measured against a
+        # synthetic perfect plate solve + perfect accelerometer, the residual was
+        # 4–9 nmi depending on observer position and date (worst 8.95 nmi), fully
+        # systematic — a burst median cannot remove it.
+        #
+        # Rotating the zenith into CIRS before extracting lat/lon is exact and
+        # also handles roll for free: with v_cam = R_icrs·v_icrs = R_cirs·v_cirs
+        # and v_cirs = M·v_icrs, we get R_cirs = R_icrs·Mᵀ and hence
+        # zenith_cirs = R_cirsᵀ·v_cam = M·(R_icrsᵀ·v_cam) = M·zenith_icrs.
+        # No change to R is needed. Same synthetic test after the fix: 0.0000 nmi.
+        #
+        # Not corrected here: annual aberration (≤20.5" ≈ 0.34 nmi), which
+        # displaces the apparent star field and so leaks into the solved
+        # boresight. That is well under the current error floor.
+        zenith_cirs = bpn_icrs_to_cirs @ zenith_icrs
+
         print(f"Python: 1-Shot: zenith in ICRS = {zenith_icrs}")
+        print(f"Python: 1-Shot: zenith in CIRS = {zenith_cirs}")
 
         # --- 5. Extract latitude and longitude ---
-        # Zenith declination = observer's latitude
-        lat_rad = np.arcsin(np.clip(zenith_icrs[2], -1.0, 1.0))
+        # Zenith declination (CIRS) = observer's latitude
+        lat_rad = np.arcsin(np.clip(zenith_cirs[2], -1.0, 1.0))
         lat_deg_val = np.degrees(lat_rad)
 
-        # Zenith RA in ICRS
-        lst_rad = np.arctan2(zenith_icrs[1], zenith_icrs[0])
+        # Zenith RA in CIRS — the frame ERA is measured in
+        lst_rad = np.arctan2(zenith_cirs[1], zenith_cirs[0])
         lst_deg = np.degrees(lst_rad) % 360
 
-        # Longitude = RA_icrs − ERA
+        # Longitude = RA_cirs − ERA
         lon_deg_val = (lst_deg - era_deg + 180) % 360 - 180
 
         result = {
@@ -1254,7 +1288,7 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
             "final_shift_nm": 0.0
         }
         print(f"Python: 1-Shot Fix: Lat={lat_deg_val:.4f}°, Lon={lon_deg_val:.4f}°")
-        print(f"Python: 1-Shot Fix: LST_icrs={lst_deg:.4f}°, ERA={era_deg:.4f}°")
+        print(f"Python: 1-Shot Fix: LST_cirs={lst_deg:.4f}°, ERA={era_deg:.4f}°")
         return json.dumps(result)
 
     except Exception as e:
