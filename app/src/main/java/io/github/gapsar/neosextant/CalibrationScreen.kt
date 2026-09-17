@@ -114,6 +114,15 @@ fun CalibrationScreen(
     // Python, which clusters the measured directions — what the user believes
     // are distinct attitudes very often is not.
     val MIN_AFFINE_SAMPLES = 24
+
+    // Absolute pitch/roll offset beyond which a sample is treated as a probable
+    // false plate-solve match. Shared by the legacy accumulator and the affine
+    // pair collector: solve_calibration_offsets fits a 2-parameter rotation to
+    // align two unit vectors, which is 2 DOF onto 2 DOF, so it succeeds with a
+    // near-zero residual even for a completely wrong match — its internal error
+    // gate almost never fires. This absolute bound is the real false-match
+    // detector, so the affine path must apply it too.
+    val MAX_OFFSET_DEG = 5.0
     val affinePairs = remember { mutableStateListOf<String>() }
     var affineStatus by remember { mutableStateOf("") }
 
@@ -493,11 +502,25 @@ fun CalibrationScreen(
 
                                             // ─── Affine pair collection (additive; never blocks legacy path) ───
                                             // Compute the expected gravity direction for this shot and pair it
-                                            // with the raw measured direction+magnitude. Each shot is its own
-                                            // attitude group for leave-one-out validation.
+                                            // with the raw measured direction+magnitude. Attitude grouping is
+                                            // derived from the data in Python, not tagged here.
+                                            //
+                                            // The affine collector deliberately skips the deviation-from-mean
+                                            // filter below — that would reject exactly the attitude spread the
+                                            // fit needs — but it must NOT skip the absolute-offset bound, which
+                                            // is a false-match detector rather than a spread filter. One false
+                                            // match contributes a pair whose expected direction is essentially
+                                            // random, which either skews the fit or (more likely) inflates the
+                                            // held-out error enough to reject an otherwise good session.
+                                            val calPitchOffset = calResultJson.optDouble("pitch_offset_deg", Double.NaN)
+                                            val calRollOffset = calResultJson.optDouble("roll_offset_deg", Double.NaN)
+                                            val offsetsPlausible = !calPitchOffset.isNaN() && !calRollOffset.isNaN() &&
+                                                abs(calPitchOffset) <= MAX_OFFSET_DEG &&
+                                                abs(calRollOffset) <= MAX_OFFSET_DEG
+
                                             var affinePairJson: String? = null
                                             var affineFitJson: String? = null
-                                            if (err == null && rawSnap != null) {
+                                            if (err == null && rawSnap != null && offsetsPlausible) {
                                                 try {
                                                     val pairStr = pythonScript.callAttr(
                                                         "solve_calibration_pair",
@@ -599,7 +622,6 @@ fun CalibrationScreen(
                                                     val rollOffset = calResultJson.getDouble("roll_offset_deg")
 
                                                     // Reject outliers: absolute offset > 5° on either axis
-                                                    val MAX_OFFSET_DEG = 5.0
                                                     if (abs(pitchOffset) > MAX_OFFSET_DEG || abs(rollOffset) > MAX_OFFSET_DEG) {
                                                         statusMessage = "Sample rejected: offset too large (P: %.2f° R: %.2f°, max ±%.0f°). Retake.".format(pitchOffset, rollOffset, MAX_OFFSET_DEG)
                                                         Log.w("CalibrationScreen", "Rejected 1-Shot sample: pitch=$pitchOffset, roll=$rollOffset (exceeds ±$MAX_OFFSET_DEG°)")
