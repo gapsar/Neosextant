@@ -264,9 +264,17 @@ fun CameraView(
                         if (burstGroups.length() == 0) {
                             org.json.JSONObject().apply { put("error", "No gravity vector recorded for 1-Shot") }
                         } else {
+                            // Pressure/temperature drive the refraction correction applied
+                            // to the zenith at the boresight (same SOFA model the LOP and
+                            // iterative paths get via astropy AltAz).
+                            val pressureHpa = pressure.toDoubleOrNull() ?: 1013.25
+                            val temperatureC = temperature.toDoubleOrNull() ?: 15.0
+
                             val solveResultJsonStr = pythonScript.callAttr(
                                 "solve_oneshot_burst_multi",
-                                burstGroups.toString()
+                                burstGroups.toString(),
+                                pressureHpa,
+                                temperatureC
                             ).toString()
                             org.json.JSONObject(solveResultJsonStr)
                         }

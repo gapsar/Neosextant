@@ -1121,8 +1121,22 @@ def solve_lop_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.
 
 
 
+# Refraction model inputs shared by the 1-Shot path. Relative humidity and
+# wavelength feed erfa.refco; 0.55 µm is the visual band the camera actually
+# responds to. (astropy's AltAz defaults to 1 µm, which under-refracts by ~1.5%
+# — 0.014' at 45°, far below this path's error floor, so the two paths agree
+# to well inside their own accuracy.)
+REFRACTION_RH = 0.0
+REFRACTION_WAVELENGTH_UM = 0.55
+# Below this altitude the SOFA refraction model degrades quickly and the plate
+# solve is unreliable anyway; leave the vector uncorrected rather than apply a
+# wrong correction.
+MIN_REFRACTION_ALT_DEG = 5.0
+
+
 # --- 1-SHOT FIX CALCULATION ---
-def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
+def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path,
+                  pressure_hpa=1013.25, temperature_c=15.0):
     """
     Computes a 1-Shot geographic fix from a single image using the
     3D Gravity Vector (zenith direction) and the plate-solve orientation.
@@ -1130,9 +1144,10 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
     Algorithm:
     1. Reconstruct tetra3's rotation matrix R (ICRS → camera) from RA/Dec/Roll.
     2. Map the zenith vector from Android sensor frame to tetra3's camera frame.
-    3. Transform zenith from camera frame to ICRS: zenith_icrs = R^T @ zenith_cam.
-    4. Extract latitude = arcsin(z_icrs), LST = atan2(y_icrs, x_icrs).
-    5. Longitude = LST − GST.
+    3. Correct the zenith for atmospheric refraction at the boresight.
+    4. Transform zenith from camera frame to ICRS, then rotate into CIRS.
+    5. Extract latitude = arcsin(z_cirs), LST = atan2(y_cirs, x_cirs).
+    6. Longitude = LST − ERA.
     """
     try:
         import numpy as np
@@ -1238,6 +1253,58 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
 
         print(f"Python: 1-Shot: zenith in camera frame = {v_cam}")
 
+        # --- 3b. Atmospheric refraction ---
+        # Refraction lifts stars TOWARD the zenith, so the object imaged at the
+        # frame centre sits at apparent altitude alt_obs while its CATALOG
+        # altitude is alt_obs − R. tetra3 matched against the catalog, so R's
+        # boresight row is the catalog direction — but the accelerometer measured
+        # the zenith relative to where the camera PHYSICALLY pointed, i.e. the
+        # apparent direction. The two differ by exactly R, so the reconstructed
+        # zenith ends up R too close to the boresight.
+        #
+        # Correcting is a rotation of the zenith AWAY from the boresight by R,
+        # in the plane the two span (boresight is axis 0 of the camera frame):
+        #     z_true = z_obs + R
+        # R comes from erfa.refco, the same SOFA model astropy's AltAz uses for
+        # the LOP/iterative paths, evaluated at the OBSERVED zenith distance —
+        # verified against astropy to 1e-4 arcmin.
+        #
+        # This is one-sided (always the same sense) and identical across a
+        # burst, so — unlike random sensor noise — the two-level median cannot
+        # reduce it. Magnitude: 0.55' at 60° altitude, 0.96' at 45°, 1.7' at 30°,
+        # i.e. 0.5–1.7 nmi of position.
+        #
+        # First order only: this applies the refraction at the frame CENTRE.
+        # Across a ~46° field refraction also varies star-to-star (0.4' at the
+        # top vs 2.4' at the bottom for a 45° boresight), which distorts the
+        # pattern tetra3 fits. Removing that needs the centroids de-refracted
+        # before solving, using the zenith direction in the image.
+        boresight_cam = np.array([1.0, 0.0, 0.0])
+        cos_zb = float(np.clip(np.dot(v_cam, boresight_cam), -1.0, 1.0))
+        z_obs_rad = np.arccos(cos_zb)
+        alt_obs_deg = 90.0 - np.degrees(z_obs_rad)
+
+        perp = v_cam - cos_zb * boresight_cam
+        perp_norm = np_norm(perp)
+
+        if alt_obs_deg <= MIN_REFRACTION_ALT_DEG:
+            print(f"Python: 1-Shot: boresight altitude {alt_obs_deg:.2f}° too low "
+                  f"(<{MIN_REFRACTION_ALT_DEG}°); skipping refraction correction")
+        elif perp_norm < 1e-9:
+            # Boresight is at the zenith: refraction is zero there anyway.
+            print("Python: 1-Shot: boresight at zenith; no refraction correction")
+        else:
+            refa, refb = erfa.refco(float(pressure_hpa), float(temperature_c),
+                                    REFRACTION_RH, REFRACTION_WAVELENGTH_UM)
+            tan_z = np.tan(z_obs_rad)
+            dz_rad = refa * tan_z + refb * tan_z ** 3
+            z_true_rad = z_obs_rad + dz_rad
+            v_cam = (np.cos(z_true_rad) * boresight_cam +
+                     np.sin(z_true_rad) * (perp / perp_norm))
+            print(f"Python: 1-Shot: refraction at alt={alt_obs_deg:.2f}° "
+                  f"(P={pressure_hpa:.1f} hPa, T={temperature_c:.1f}°C) = "
+                  f"{np.degrees(dz_rad) * 60:.3f}' -> zenith corrected")
+
         # --- 4. Transform zenith from camera frame to ICRS, then to CIRS ---
         # R maps ICRS → camera, so R^T maps camera → ICRS
         zenith_icrs = R.T @ v_cam
@@ -1297,7 +1364,7 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path):
         print(f"Python: {error_msg}\n{traceback.format_exc()}")
         return json.dumps({"error": error_msg})
 
-def _solve_obs_group(obs_group, label):
+def _solve_obs_group(obs_group, label, pressure_hpa=1013.25, temperature_c=15.0):
     """
     Solves each observation of a group independently via solve_oneshot.
     Returns (lats, lons) of the successful fixes; failures are logged.
@@ -1309,7 +1376,8 @@ def _solve_obs_group(obs_group, label):
             obs['ra'], obs['dec'], obs['roll'],
             obs['gx'], obs['gy'], obs['gz'],
             obs['time_iso'],
-            ""  # image_path not needed for solve
+            "",  # image_path not needed for solve
+            pressure_hpa, temperature_c
         )
         result = json.loads(result_json)
 
@@ -1337,7 +1405,7 @@ def _median_fix(lats, lons):
     return median_lat, median_lon, spread_nm
 
 
-def solve_oneshot_multi(obs_list_json):
+def solve_oneshot_multi(obs_list_json, pressure_hpa=1013.25, temperature_c=15.0):
     """
     Multi-shot 1-Shot solver: solves each observation independently
     and returns the component-wise median position.
@@ -1354,7 +1422,8 @@ def solve_oneshot_multi(obs_list_json):
     try:
         obs_list = json.loads(obs_list_json)
 
-        lats, lons = _solve_obs_group(obs_list, "Multi-shot")
+        lats, lons = _solve_obs_group(obs_list, "Multi-shot",
+                                      pressure_hpa, temperature_c)
 
         if len(lats) == 0:
             return json.dumps({"error": "No valid fixes from any observation"})
@@ -1378,7 +1447,8 @@ def solve_oneshot_multi(obs_list_json):
         return json.dumps({"error": error_msg})
 
 
-def solve_oneshot_burst_multi(burst_groups_json):
+def solve_oneshot_burst_multi(burst_groups_json, pressure_hpa=1013.25,
+                              temperature_c=15.0):
     """
     Two-level median solver for burst capture mode.
 
@@ -1406,7 +1476,8 @@ def solve_oneshot_burst_multi(burst_groups_json):
 
         for slot_idx, burst_group in enumerate(burst_groups):
             # Level 1: Solve each observation in this burst independently
-            lats, lons = _solve_obs_group(burst_group, f"Burst slot {slot_idx+1}")
+            lats, lons = _solve_obs_group(burst_group, f"Burst slot {slot_idx+1}",
+                                          pressure_hpa, temperature_c)
 
             if len(lats) == 0:
                 print(f"Python: Burst slot {slot_idx+1}: No valid fixes from any burst image")
