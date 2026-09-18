@@ -1205,6 +1205,51 @@ REFRACTION_WAVELENGTH_UM = 0.55
 MIN_REFRACTION_ALT_DEG = 5.0
 
 
+def _refract_zenith_in_camera(v_cam, pressure_hpa, temperature_c, sign, label=""):
+    """
+    Rotate the zenith vector in tetra3's camera frame by the refraction at the
+    boresight, in the plane the zenith and boresight span.
+
+    sign=+1  observed -> catalog  (z_true = z_obs + R): what solve_oneshot needs,
+             because tetra3 reports the CATALOG direction of the object at frame
+             centre while the accelerometer measured the zenith relative to where
+             the camera PHYSICALLY pointed.
+    sign=-1  catalog -> observed: what the calibration needs, to predict what the
+             sensor should actually read.
+
+    Both directions live here on purpose. Applying refraction on only one side of
+    the calibrate/solve round trip silently biases every fix by R(alt) — roughly
+    1 nmi at 45 deg — and that is exactly how the frame bug above went unnoticed
+    for so long: two errors that cancelled while both paths were wrong.
+    """
+    import numpy as np
+    boresight = np.array([1.0, 0.0, 0.0])
+    cos_zb = float(np.clip(float(np.dot(v_cam, boresight)), -1.0, 1.0))
+    z_rad = np.arccos(cos_zb)
+    alt_deg = 90.0 - np.degrees(z_rad)
+    perp = v_cam - cos_zb * boresight
+    perp_norm = float(np.linalg.norm(perp))
+
+    if alt_deg <= MIN_REFRACTION_ALT_DEG:
+        print(f"Python: {label}boresight altitude {alt_deg:.2f}° too low "
+              f"(<{MIN_REFRACTION_ALT_DEG}°); skipping refraction correction")
+        return v_cam
+    if perp_norm < 1e-9:
+        print(f"Python: {label}boresight at zenith; no refraction correction")
+        return v_cam
+
+    refa, refb = erfa.refco(float(pressure_hpa), float(temperature_c),
+                            REFRACTION_RH, REFRACTION_WAVELENGTH_UM)
+    tan_z = np.tan(z_rad)
+    dz_rad = refa * tan_z + refb * tan_z ** 3
+    z_new = z_rad + sign * dz_rad
+    out = np.cos(z_new) * boresight + np.sin(z_new) * (perp / perp_norm)
+    print(f"Python: {label}refraction at alt={alt_deg:.2f}° "
+          f"(P={pressure_hpa:.1f} hPa, T={temperature_c:.1f}°C) = "
+          f"{np.degrees(dz_rad) * 60:.3f}' (sign {sign:+d})")
+    return out
+
+
 # --- 1-SHOT FIX CALCULATION ---
 def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path,
                   pressure_hpa=1013.25, temperature_c=15.0):
@@ -1350,31 +1395,8 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path,
         # top vs 2.4' at the bottom for a 45° boresight), which distorts the
         # pattern tetra3 fits. Removing that needs the centroids de-refracted
         # before solving, using the zenith direction in the image.
-        boresight_cam = np.array([1.0, 0.0, 0.0])
-        cos_zb = float(np.clip(np.dot(v_cam, boresight_cam), -1.0, 1.0))
-        z_obs_rad = np.arccos(cos_zb)
-        alt_obs_deg = 90.0 - np.degrees(z_obs_rad)
-
-        perp = v_cam - cos_zb * boresight_cam
-        perp_norm = np_norm(perp)
-
-        if alt_obs_deg <= MIN_REFRACTION_ALT_DEG:
-            print(f"Python: 1-Shot: boresight altitude {alt_obs_deg:.2f}° too low "
-                  f"(<{MIN_REFRACTION_ALT_DEG}°); skipping refraction correction")
-        elif perp_norm < 1e-9:
-            # Boresight is at the zenith: refraction is zero there anyway.
-            print("Python: 1-Shot: boresight at zenith; no refraction correction")
-        else:
-            refa, refb = erfa.refco(float(pressure_hpa), float(temperature_c),
-                                    REFRACTION_RH, REFRACTION_WAVELENGTH_UM)
-            tan_z = np.tan(z_obs_rad)
-            dz_rad = refa * tan_z + refb * tan_z ** 3
-            z_true_rad = z_obs_rad + dz_rad
-            v_cam = (np.cos(z_true_rad) * boresight_cam +
-                     np.sin(z_true_rad) * (perp / perp_norm))
-            print(f"Python: 1-Shot: refraction at alt={alt_obs_deg:.2f}° "
-                  f"(P={pressure_hpa:.1f} hPa, T={temperature_c:.1f}°C) = "
-                  f"{np.degrees(dz_rad) * 60:.3f}' -> zenith corrected")
+        v_cam = _refract_zenith_in_camera(v_cam, pressure_hpa, temperature_c,
+                                          sign=+1, label="1-Shot: ")
 
         # --- 4. Transform zenith from camera frame to ICRS, then to CIRS ---
         # R maps ICRS → camera, so R^T maps camera → ICRS
@@ -1802,7 +1824,8 @@ def solve_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.0, p
         return json.dumps({"error": error_msg})
 
 
-def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lon_deg, time_iso):
+def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lon_deg,
+                              time_iso, pressure_hpa=1013.25, temperature_c=15.0):
     """
     Computes pitch_offset and roll_offset (in degrees) that align the measured gravity
     vector (gx, gy, gz) in the sensor frame with the expected gravity vector computed
@@ -1817,13 +1840,21 @@ def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lo
         era_deg = t.earth_rotation_angle('tio').deg
         lst_deg = (lon_deg + era_deg) % 360
 
+        # lon + ERA is a right ascension in CIRS, not ICRS: ERA is measured
+        # about the CIP from the CIO. R, from tetra3, maps ICRS -> camera, so
+        # the zenith must be rotated out of CIRS before being multiplied by it.
+        # Omitting this bakes the ~0.15 deg CIP offset (see solve_oneshot) into
+        # the fitted offsets, which then over-corrects every later fix by that
+        # amount.
         lat_rad = np.radians(lat_deg)
         lst_rad = np.radians(lst_deg)
-        zenith_icrs = np.array([
+        zenith_cirs = np.array([
             np.cos(lat_rad) * np.cos(lst_rad),
             np.cos(lat_rad) * np.sin(lst_rad),
             np.sin(lat_rad)
         ])
+        _tt = t.tt
+        zenith_icrs = erfa.c2i06a(_tt.jd1, _tt.jd2).T @ zenith_cirs
 
         # 2. Camera rotation matrix R (ICRS -> camera)
         ra_rad = np.radians(float(ra_deg))
@@ -1844,6 +1875,16 @@ def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lo
 
         # 3. Expected Zenith in camera frame
         v_cam_exp = R @ zenith_icrs
+
+        # The sensor does not measure the zenith relative to the CATALOG
+        # boresight that tetra3 reports — it measures it relative to where the
+        # camera physically pointed, which refraction places R(alt) away. Undo
+        # that here (sign=-1) so the fitted offset describes the mounting error
+        # alone. solve_oneshot applies the same rotation with sign=+1; the two
+        # must always be a matched pair.
+        v_cam_exp = _refract_zenith_in_camera(v_cam_exp, pressure_hpa,
+                                              temperature_c, sign=-1,
+                                              label="Calib: ")
 
         # 4. Expected gravity in sensor frame
         # v_cam = [-gz, -gx, gy] (portrait solve frame; must match solve_oneshot)
@@ -1953,13 +1994,18 @@ def _expected_gravity_sensor(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_i
     era_deg = t.earth_rotation_angle('tio').deg
     lst_deg = (lon_deg + era_deg) % 360
 
+    # lon + ERA is a right ascension in CIRS, not ICRS — see the note in
+    # solve_calibration_offsets. R maps ICRS -> camera, so rotate out of CIRS
+    # first or the CIP offset is baked into the fitted model.
     lat_rad = np.radians(lat_deg)
     lst_rad = np.radians(lst_deg)
-    zenith_icrs = np.array([
+    zenith_cirs = np.array([
         np.cos(lat_rad) * np.cos(lst_rad),
         np.cos(lat_rad) * np.sin(lst_rad),
         np.sin(lat_rad)
     ])
+    _tt = t.tt
+    zenith_icrs = erfa.c2i06a(_tt.jd1, _tt.jd2).T @ zenith_cirs
 
     ra_rad = np.radians(float(ra_deg))
     dec_rad = np.radians(float(dec_deg))

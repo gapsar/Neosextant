@@ -64,7 +64,12 @@ fun CalibrationScreen(
     currentOneshotRollOffset: Double,
     iso: Int = 3200,
     exposureTimeMs: Int = 250,
-    supportsManualExposure: Boolean = true
+    supportsManualExposure: Boolean = true,
+    // Feed the same refraction model the solver uses: the calibration must
+    // predict what the sensor actually reads, refraction included, or the
+    // fitted offset absorbs R(alt) and biases every later fix by it.
+    temperature: String = "15",
+    pressure: String = "1013.25"
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -502,7 +507,9 @@ fun CalibrationScreen(
                                                 ra, dec, roll,
                                                 avgGravity.x, avgGravity.y, avgGravity.z,
                                                 latSigned, lonSigned,
-                                                captureTimeIso
+                                                captureTimeIso,
+                                                pressure.toDoubleOrNull() ?: 1013.25,
+                                                temperature.toDoubleOrNull() ?: 15.0
                                             ).toString()
 
                                             val calResultJson = org.json.JSONObject(calResultJsonStr)

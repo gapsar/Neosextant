@@ -317,7 +317,9 @@ fun AppNavigator(
                 currentOneshotRollOffset = getOneshotRollOffset(),
                 iso = vm.iso.value,
                 exposureTimeMs = vm.exposureTimeMs.value,
-                supportsManualExposure = supportsManualExposure
+                supportsManualExposure = supportsManualExposure,
+                temperature = temperature,
+                pressure = pressure
             )
         }
         composable("debugSensors") {
