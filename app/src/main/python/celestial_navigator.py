@@ -44,28 +44,91 @@ except ImportError as e:
 # SECTION 1: ASTROPY IERS CONFIGURATION
 # =============================================================================
 
-import urllib.request
 from astropy.utils import iers
 import warnings
 
-def _setup_iers():
-    """
-    Configures Astropy's Earth rotation (IERS) data fetching.
-    If online, downloads the latest tables for sub-arcsecond accuracy.
-    If offline, suppresses expiration errors and falls back to bundled tables.
-    """
-    warnings.filterwarnings('ignore', module='erfa') # Suppress ERFA warnings about future years
-    try:
-        urllib.request.urlopen("https://datacenter.iers.org", timeout=0.5)
-        iers.conf.auto_download = True
-        print("Python: Internet available. Astropy will auto-download IERS data.")
-    except Exception:
-        iers.conf.auto_download = False
-        iers.conf.auto_max_age = None
-        iers.conf.iers_degraded_accuracy = 'ignore'
-        print("Python: Offline mode. Astropy using bundled IERS data.")
+IERS_STATUS = "bundled"   # bundled | cached | downloaded  (diagnostics only)
 
-threading.Thread(target=_setup_iers, daemon=True).start()
+
+def _configure_iers():
+    """
+    Put astropy's Earth-rotation handling into a state that CANNOT raise, and do
+    it synchronously at import, before anything can trigger a time conversion.
+
+    The previous version did this on a daemon thread, which left two holes:
+
+      1. A race. Until the thread ran, iers.conf kept its defaults —
+         auto_download=True, auto_max_age=30 days. A solve starting in that
+         window, with a stale table and no usable network, raises
+             ValueError: interpolating from IERS_Auto using predictive values
+             that are more than 30.0 days old
+         and the fix fails outright rather than being slightly less accurate.
+      2. The online branch set auto_download=True but left auto_max_age at 30
+         days, so the same exception was reachable whenever the reachability
+         probe succeeded but the actual table was stale or the download failed.
+         A captive portal (marina/harbour wifi) answers any request with a 200,
+         so the probe reported "online" exactly where it was least true.
+
+    auto_download stays False permanently: no solve should ever block on the
+    network. Fresh data is installed explicitly by _refresh_iers_background().
+    """
+    warnings.filterwarnings('ignore', module='erfa')  # future-year ERFA warnings
+    iers.conf.auto_download = False
+    iers.conf.auto_max_age = None
+    iers.conf.iers_degraded_accuracy = 'ignore'
+
+
+# Synchronous, at import: no window in which a solve can hit the defaults.
+_configure_iers()
+
+
+def _table_covers_now(table, margin_days=30.0):
+    """True if the table still has data margin_days beyond today."""
+    try:
+        from astropy.time import Time
+        mjd = table['MJD']
+        last = float(getattr(mjd, 'value', mjd)[-1])
+        return (last - Time.now().mjd) > margin_days
+    except Exception:
+        return False
+
+
+def _refresh_iers_background():
+    """
+    Best effort: install the most current IERS-A table we can get, without ever
+    putting the config back into a state that can raise.
+
+    cache=True means a table fetched once ashore is reused with NO network at
+    all, so a single sync before leaving keeps working at sea. astropy's own
+    bundled IERS-B ends 2022-08-30, so without this the app extrapolates UT1-UTC
+    from a four-year-old table; that is only ~0.1-0.2 nmi of longitude, but it
+    is free to remove when a network is available.
+    """
+    global IERS_STATUS
+    for url in (iers.IERS_A_URL, iers.IERS_A_URL_MIRROR):
+        try:
+            table = iers.IERS_A.open(url, cache=True)
+            iers.earth_orientation_table.set(table)
+            IERS_STATUS = "cached"
+            print(f"Python: IERS-A table installed from cache/{url}")
+            # A cached table is never re-downloaded, and IERS-A only predicts
+            # about a year ahead, so force one refresh when it runs short.
+            if not _table_covers_now(table):
+                try:
+                    fresh = iers.IERS_A.open(url, cache="update")
+                    iers.earth_orientation_table.set(fresh)
+                    IERS_STATUS = "downloaded"
+                    print("Python: IERS-A table refreshed over the network")
+                except Exception as e_up:
+                    print(f"Python: IERS-A refresh failed ({e_up}); keeping cached table")
+            return
+        except Exception as e:
+            print(f"Python: IERS-A unavailable from {url}: {e}")
+    print("Python: using astropy's bundled IERS-B (ends 2022-08-30); UT1-UTC "
+          "extrapolated, ~0.1-0.2 nmi of longitude")
+
+
+threading.Thread(target=_refresh_iers_background, daemon=True).start()
 
 # =============================================================================
 # SECTION 2: IMAGE SOLVING (ASTROMETRY)
