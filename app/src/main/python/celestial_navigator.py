@@ -1169,11 +1169,19 @@ def solve_lop_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.
         else:
             print(f"Python: LOP WARNING - Max iterations ({MAX_ITERATIONS}) reached. Final shift: {final_shift:.4f} NM")
 
+        # Residual-based uncertainty from the converged fit. final_shift_nm is a
+        # CONVERGENCE metric — it tends to 0 as the solver settles no matter how
+        # wrong the answer is — so it must never be shown as an error bar.
+        uncertainty_nm = _lsq_position_uncertainty(azimuths, intercepts)
+
         return json.dumps({
             "fixed_latitude": float(current_lat),
             "fixed_longitude": float(current_lon),
             "iterations": iterations_done,
-            "final_shift_nm": final_shift
+            "final_shift_nm": final_shift,
+            "error_estimate_nm": uncertainty_nm,
+            "repeatability_nm": uncertainty_nm,
+            "repeatability_basis": "%d sights, least-squares residuals" % len(obs_list)
         })
 
     except Exception as e:
@@ -1453,19 +1461,44 @@ def _solve_obs_group(obs_group, label, pressure_hpa=1013.25, temperature_c=15.0)
     return lats, lons
 
 
+# MAD -> sigma for normally distributed data. Without it the raw MAD
+# understates the spread by a third.
+MAD_TO_SIGMA = 1.4826
+# Standard error of a MEDIAN is sqrt(pi/2) times that of a mean, for the same n.
+MEDIAN_SE_FACTOR = 1.2533
+# Fewer than this many fixes and a robust spread estimate is meaningless — a
+# single fix has a MAD of exactly zero, which must never be reported as "0.00
+# NM of error".
+MIN_FIXES_FOR_SPREAD = 3
+
+
 def _median_fix(lats, lons):
     """
-    Component-wise median of fixes (robust to outliers) plus a MAD-based
-    spread estimate converted to nautical miles.
-    Returns (median_lat, median_lon, spread_nm). For a single fix the
-    median is the fix itself and the spread is 0.
+    Component-wise median of fixes (robust to outliers) plus an estimate of how
+    REPRODUCIBLE that median is, in nautical miles.
+
+    Returns (median_lat, median_lon, repeatability_nm).
+
+    repeatability_nm is the standard error of the median: how much the answer
+    would move if the same shots were taken again. It is NOT the distance to
+    the true position. Errors shared by every shot in a burst — accelerometer
+    calibration, residual refraction, clock offset — are identical in all of
+    them and therefore contribute exactly ZERO to this number. A burst can be
+    beautifully repeatable and still be miles off.
+
+    NaN when there are too few fixes to say anything, rather than 0.0.
     """
     median_lat = float(np.median(lats))
     median_lon = float(np.median(lons))
-    lat_mad = float(np.median(np.abs(np.array(lats) - median_lat))) * 60.0  # deg to NM
-    lon_mad = float(np.median(np.abs(np.array(lons) - median_lon))) * 60.0 * abs(np.cos(np.radians(median_lat)))
-    spread_nm = float(np.sqrt(lat_mad**2 + lon_mad**2))
-    return median_lat, median_lon, spread_nm
+    n = len(lats)
+    if n < MIN_FIXES_FOR_SPREAD:
+        return median_lat, median_lon, float("nan")
+
+    lat_sigma = float(np.median(np.abs(np.array(lats) - median_lat))) * 60.0 * MAD_TO_SIGMA
+    lon_sigma = (float(np.median(np.abs(np.array(lons) - median_lon)))
+                 * 60.0 * abs(np.cos(np.radians(median_lat))) * MAD_TO_SIGMA)
+    sigma_nm = float(np.sqrt(lat_sigma ** 2 + lon_sigma ** 2))
+    return median_lat, median_lon, MEDIAN_SE_FACTOR * sigma_nm / np.sqrt(n)
 
 
 def solve_oneshot_multi(obs_list_json, pressure_hpa=1013.25, temperature_c=15.0):
@@ -1570,14 +1603,32 @@ def solve_oneshot_burst_multi(burst_groups_json, pressure_hpa=1013.25,
         # Level 2: Inter-slot median
         final_lat, final_lon, total_spread = _median_fix(slot_lats, slot_lons)
 
+        # With one or two slots there is no inter-slot spread to measure, but
+        # the single slot's own burst still has ~7 fixes. Report that rather
+        # than NaN — and never 0.00, which the old code produced for one slot.
+        repeatability = total_spread
+        basis = "%d slots" % len(slot_lats)
+        if repeatability != repeatability:  # NaN
+            intra = [d.get("intra_burst_spread_nm") for d in burst_details
+                     if d.get("intra_burst_spread_nm") is not None]
+            intra = [v for v in intra if v == v]
+            if intra:
+                repeatability = float(max(intra))
+                basis = "single burst of %d fixes" % max(
+                    d.get("valid_fixes", 0) for d in burst_details)
+
         print(f"Python: Burst-multi FINAL from {len(slot_lats)} slots: "
-              f"Lat={final_lat:.4f}, Lon={final_lon:.4f}, spread={total_spread:.2f} NM")
+              f"Lat={final_lat:.4f}, Lon={final_lon:.4f}, "
+              f"repeatability={repeatability:.2f} NM ({basis})")
 
         return json.dumps({
             "fixed_latitude": final_lat,
             "fixed_longitude": final_lon,
-            "error_estimate_nm": total_spread,
-            "final_shift_nm": total_spread,
+            # Repeatability, NOT accuracy — see _median_fix. Systematic errors
+            # common to every shot cancel out of this entirely.
+            "repeatability_nm": repeatability,
+            "repeatability_basis": basis,
+            "error_estimate_nm": repeatability,
             "num_slots": len(slot_lats),
             "burst_details": burst_details,
             "individual_fixes": [{"lat": la, "lon": lo} for la, lo in zip(slot_lats, slot_lons)]
@@ -1590,6 +1641,40 @@ def solve_oneshot_burst_multi(burst_groups_json, pressure_hpa=1013.25,
 
 
 # --- Refactored Core Logic for Iteration ---
+
+def _lsq_position_uncertainty(azimuths_deg, intercepts_nm):
+    """
+    1-sigma position uncertainty (DRMS, nautical miles) from the least-squares
+    fit of the sights, or NaN if there is no redundancy.
+
+    At convergence the LSQ shift is ~0, so the remaining intercepts ARE the
+    misfits between the sights. With m sights and 2 unknowns:
+        sigma^2 = SSR / (m - 2)
+        cov     = sigma^2 * (A^T A)^-1
+        DRMS    = sqrt(trace(cov))
+    This captures both measurement scatter and the geometry (a tight cluster of
+    azimuths gives a large uncertainty along the unconstrained direction, which
+    the old convergence-shift number was completely blind to).
+
+    Still not accuracy: a bias common to every sight is partly absorbed into the
+    position rather than showing up in the residuals.
+    """
+    m = len(intercepts_nm)
+    if m < 3:
+        return float("nan")
+    A = np.array([[np.sin(np.deg2rad(az)), np.cos(np.deg2rad(az))]
+                  for az in azimuths_deg])
+    r = np.asarray(intercepts_nm, dtype=float)
+    try:
+        ata_inv = np.linalg.inv(A.T @ A)
+    except np.linalg.LinAlgError:
+        return float("nan")      # degenerate geometry: all sights same bearing
+    ssr = float(np.sum(r ** 2))
+    sigma_sq = ssr / (m - 2)
+    cov = sigma_sq * ata_inv
+    trace = float(cov[0, 0] + cov[1, 1])
+    return float(np.sqrt(trace)) if trace > 0 else float("nan")
+
 
 def core_compute_intercept(ra, dec, time_obj, lat, lon, alt_obs, height_m=0.0, pressure_hpa=1013.25, temperature_c=15.0):
     # Setup
@@ -1696,11 +1781,19 @@ def solve_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.0, p
         else:
             print(f"Python: WARNING - Max iterations ({MAX_ITERATIONS}) reached without convergence. Final shift: {final_shift:.4f} NM")
 
+        # Residual-based uncertainty from the converged fit. final_shift_nm is a
+        # CONVERGENCE metric — it tends to 0 as the solver settles no matter how
+        # wrong the answer is — so it must never be shown as an error bar.
+        uncertainty_nm = _lsq_position_uncertainty(azimuths, intercepts)
+
         return json.dumps({
             "fixed_latitude": float(current_lat),
             "fixed_longitude": float(current_lon),
             "iterations": iterations_done,
-            "final_shift_nm": final_shift
+            "final_shift_nm": final_shift,
+            "error_estimate_nm": uncertainty_nm,
+            "repeatability_nm": uncertainty_nm,
+            "repeatability_basis": "%d sights, least-squares residuals" % len(obs_list)
         })
 
     except Exception as e:

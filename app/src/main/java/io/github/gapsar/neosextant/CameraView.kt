@@ -328,7 +328,12 @@ fun CameraView(
 
                 val finalLatitude = result.getDouble("fixed_latitude")
                 val finalLongitude = result.getDouble("fixed_longitude")
-                val shiftNm = result.optDouble("final_shift_nm", result.optDouble("error_estimate_nm", Double.NaN))
+                // Prefer the residual/spread-based estimate. final_shift_nm is only a
+                // convergence metric: it tends to 0 as the iterative solver settles,
+                // regardless of how far off the answer is, so it is a last resort.
+                val shiftNm = result.optDouble("repeatability_nm",
+                    result.optDouble("error_estimate_nm",
+                        result.optDouble("final_shift_nm", Double.NaN)))
                 Log.d("Solver", "Fix: Lat=$finalLatitude, Lon=$finalLongitude, error=$shiftNm NM")
 
                 // Per-slot fixes for the map's multi-fix markers; absent (→ empty list)
@@ -767,11 +772,17 @@ fun CameraView(
                     .align(Alignment.TopEnd)
                     .padding(top = 32.dp, end = 12.dp)
             ) {
-                if (solverMode == SolverMode.ITERATIVE && computedPrecision != null) {
+                // Shown for every mode that produces a figure, not just Iterative.
+                // Labelled "rep" (repeatability) rather than "±": it measures how
+                // reproducible the fix is, not how close to true. Errors shared by
+                // every sight — accelerometer calibration above all — cancel out of
+                // it completely, so a tight number here does NOT mean a good fix.
+                val repeatability = computedPrecision
+                if (repeatability != null && !repeatability.isNaN()) {
                     ExtendedFloatingActionButton(
                         onClick = { navController.navigate("map") },
                         icon = { Icon(Icons.Default.Map, contentDescription = S.goToMap) },
-                        text = { Text("Map (±%.1f NM)".format(computedPrecision)) }
+                        text = { Text("Map (rep %.1f NM)".format(repeatability)) }
                     )
                 } else {
                     IconButton(onClick = { navController.navigate("map") }) {
