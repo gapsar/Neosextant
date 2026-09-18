@@ -160,6 +160,20 @@ object TimeSynchronizer {
     }
 
     /**
+     * True time at a past instant given on the SystemClock.elapsedRealtimeNanos
+     * clock — used to timestamp a photo at its exposure midpoint rather than at
+     * whenever the JPEG finished being written.
+     *
+     * Works back from now via the monotonic clock, so it is unaffected by the
+     * encode/write latency between the shutter and the call site. 1 s of error
+     * here is 0.25 nmi of longitude.
+     */
+    fun getTrueTimeAtElapsedNanos(elapsedNs: Long): Date {
+        val ageMillis = (SystemClock.elapsedRealtimeNanos() - elapsedNs) / 1_000_000L
+        return Date(System.currentTimeMillis() + timeOffsetMillis - ageMillis)
+    }
+
+    /**
      * Returns a Pair indicating the age of the sync in milliseconds, and a boolean true if it's reliable (elapsedRealtime),
      * or false if the device rebooted (fallback to currentTimeMillis). Returns null if never synced.
      */

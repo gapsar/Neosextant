@@ -103,7 +103,7 @@ fun CameraView(
     onIndividualFixesChange: (List<Pair<Double, Double>>) -> Unit,
     supportsManualExposure: Boolean,
     startPitchAveraging: () -> Unit,
-    stopPitchAveraging: () -> SensorCalibrator.Vec3?,
+    stopPitchAveraging: (MainActivity.ExposureWindow?) -> SensorCalibrator.Vec3?,
     markCalibrationUsed: () -> Unit,
     analysisJobs: java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.Job>,
     isRedTintMode: Boolean,
@@ -116,7 +116,7 @@ fun CameraView(
     // shot if a validated affine calibration exists, else null (→ legacy offset
     // path). Must be called right after stopPitchAveraging() so it reads the same
     // shot's raw gravity snapshot.
-    getOneshotAffineUp: () -> SensorCalibrator.Vec3? = { null },
+    getOneshotAffineUp: (MainActivity.ExposureWindow?) -> SensorCalibrator.Vec3? = { null },
     iso: Int,
     exposureTimeMs: Int
 ) {
@@ -811,10 +811,22 @@ fun CameraView(
                                     startPitchAveraging()
 
                                     // Take one photo (suspend until captured)
-                                    val (uri, path) = takePhotoSuspend(context, imageCapture)
+                                    val capture = takePhotoSuspend(context, imageCapture)
+                                    val uri = capture.uri
+                                    val path = capture.path
+
+                                    // Exposure interval on the elapsedRealtime clock. Both the
+                                    // gravity average and the recorded time are anchored to this
+                                    // rather than to "whenever the JPEG finished being written",
+                                    // which trails the photons by several hundred ms.
+                                    val exposureWindow = capture.shutterElapsedNs?.let { start ->
+                                        val durNs = if (supportsManualExposure)
+                                            exposureTimeMs * 1_000_000L else 0L
+                                        MainActivity.ExposureWindow(start, start + durNs)
+                                    }
 
                                     // Get individual gravity snapshot for this burst image
-                                    val avgGravityRaw = stopPitchAveraging()
+                                    val avgGravityRaw = stopPitchAveraging(exposureWindow)
                                     val gravityVector: SensorCalibrator.Vec3
                                     val measuredHeight: Double?
 
@@ -822,7 +834,7 @@ fun CameraView(
                                         if (solverMode == SolverMode.ONE_SHOT) {
                                             // Prefer the affine model when a validated calibration exists;
                                             // otherwise fall back to the legacy pitch/roll offset path.
-                                            val affineUp = getOneshotAffineUp()
+                                            val affineUp = getOneshotAffineUp(exposureWindow)
                                             gravityVector = if (affineUp != null) {
                                                 affineUp
                                             } else {
@@ -849,7 +861,12 @@ fun CameraView(
                                         measuredHeight = null
                                     }
 
-                                    val captureTime = TimeSynchronizer.getTrueTime()
+                                    // Time of the EXPOSURE MIDPOINT, not of the file write.
+                                    // 1 s of clock error is 0.25 nmi of longitude, and the
+                                    // encode+write tail is easily several hundred ms.
+                                    val captureTime = exposureWindow?.let {
+                                        TimeSynchronizer.getTrueTimeAtElapsedNanos(it.midpointNs)
+                                    } ?: TimeSynchronizer.getTrueTime()
                                     val timestamp = utcFormat.format(captureTime)
 
                                     burstData.add(BurstSubResult(
@@ -1043,7 +1060,7 @@ fun CameraView(
                                 Log.e("CameraView", "Burst capture failed", e)
                                 burstProgress = ""
                                 isTakingPicture = false
-                                stopPitchAveraging() // Ensure cleanup
+                                stopPitchAveraging(null) // Ensure cleanup
                             }
                         }
                     }
@@ -1194,26 +1211,53 @@ fun takePhoto(
         })
 }
 
+/**
+ * Result of a still capture, including when the shutter actually opened.
+ *
+ * [shutterElapsedNs] is SystemClock.elapsedRealtimeNanos() sampled inside
+ * ImageCapture's onCaptureStarted callback — the same clock the sensor rolling
+ * buffer is stamped with, so the exposure interval can be intersected with the
+ * gravity samples directly. Null if the callback never fired, in which case
+ * callers fall back to "most recent samples".
+ */
+data class CaptureResult(
+    val uri: Uri,
+    val path: String,
+    val shutterElapsedNs: Long?
+)
+
 suspend fun takePhotoSuspend(
     context: Context,
     imageCapture: ImageCapture
-): Pair<Uri, String> = suspendCancellableCoroutine { cont ->
+): CaptureResult = suspendCancellableCoroutine { cont ->
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
         .format(System.currentTimeMillis()) + ".jpg"
     val photoFile = File(context.getExternalFilesDir(null), name)
     val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
+    // Both callbacks are delivered on the main executor, so no synchronisation needed.
+    var shutterNs: Long? = null
+
     imageCapture.takePicture(
         outputOptions,
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageSavedCallback {
+            // Fires when the camera begins the exposure, NOT when the file has
+            // been encoded and written. onImageSaved can trail it by hundreds of
+            // ms, which is why the gravity window must be anchored here.
+            override fun onCaptureStarted() {
+                shutterNs = android.os.SystemClock.elapsedRealtimeNanos()
+            }
+
             override fun onError(exc: ImageCaptureException) {
                 if (cont.isActive) cont.resumeWithException(exc)
             }
 
             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                 val savedUri = Uri.fromFile(photoFile)
-                if (cont.isActive) cont.resume(Pair(savedUri, photoFile.absolutePath))
+                if (cont.isActive) {
+                    cont.resume(CaptureResult(savedUri, photoFile.absolutePath, shutterNs))
+                }
             }
         }
     )

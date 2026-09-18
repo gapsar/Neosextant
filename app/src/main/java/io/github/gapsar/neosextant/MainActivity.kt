@@ -58,9 +58,20 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // Continuously collects (altitude, gravity, gyroMag) tuples so that when
     // the shutter fires, we can compute a stability-weighted average that
     // favours readings from the quietest moments over the last ~3 seconds.
+    /**
+     * The interval the camera was actually integrating photons, on the
+     * SystemClock.elapsedRealtimeNanos clock — the same base the rolling buffer
+     * is stamped with, so the two can be intersected directly.
+     */
+    data class ExposureWindow(val startNs: Long, val endNs: Long) {
+        val midpointNs: Long get() = (startNs + endNs) / 2
+    }
+
     private data class StabilityWeightedSample(
         val gravity: SensorCalibrator.Vec3,
         val gyroMagnitude: Float,
+        /** elapsedRealtimeNanos at which this sample was produced. */
+        val timestampNs: Long = 0L,
         // Raw-accelerometer gravity direction (Kalman-fused but NOT sphere-fit
         // corrected) and the raw |accel| magnitude at capture. Retained only so
         // the 1-Shot star calibration can fit a full affine model (A·a_raw + b);
@@ -89,6 +100,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     companion object {
         /** ~3 seconds at SENSOR_DELAY_GAME (~50 Hz). */
         private const val ROLLING_BUFFER_SIZE = 150
+
+        /** Fallback window (~500 ms at 50 Hz) when no exposure window is known. */
+        private const val GRAVITY_WINDOW_SAMPLES = 25
+
+        /** Below this many in-exposure samples, widen about the midpoint instead. */
+        private const val MIN_EXPOSURE_WINDOW_SAMPLES = 5
         /** Weighting steepness: 0.5 rad/s → weight ≈ 0.14, 1.0 rad/s → weight ≈ 0.0003. */
         private const val GYRO_WEIGHT_K = 8.0
     }
@@ -430,6 +447,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             StabilityWeightedSample(
                                 fusedGravity,
                                 currentGyroMagnitude,
+                                android.os.SystemClock.elapsedRealtimeNanos(),
                                 rawFusedGravity,
                                 rawAccelMag
                             )
@@ -522,62 +540,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
      * during stable moments (low angular velocity) dominate, and readings
      * during ship sway / hand tremor are suppressed.
      */
-    fun stopPitchAveraging(): SensorCalibrator.Vec3? {
+    fun stopPitchAveraging(exposure: ExposureWindow? = null): SensorCalibrator.Vec3? {
         isAveragingPitch = false
-
-        val snapshot: List<StabilityWeightedSample>
-        synchronized(rollingBuffer) {
-            val allSamples = rollingBuffer.toList()
-            // Use only the most recent ~500ms (25 samples at 50Hz) to match
-            // the camera exposure window. The full 3-second buffer includes
-            // readings from before the user settled on their target, which
-            // dilute the gravity measurement with stale orientations.
-            val GRAVITY_WINDOW_SAMPLES = 25
-            snapshot = if (allSamples.size > GRAVITY_WINDOW_SAMPLES) {
-                allSamples.takeLast(GRAVITY_WINDOW_SAMPLES)
-            } else {
-                allSamples
-            }
-        }
-
-        if (snapshot.isEmpty()) {
-            Log.d("MainActivity", "Stopped pitch averaging. Rolling buffer empty.")
-            return null
-        }
-
-        var totalWeight = 0.0
-        var weightedGx = 0.0
-        var weightedGy = 0.0
-        var weightedGz = 0.0
-
-        for (sample in snapshot) {
-            val w = exp(-GYRO_WEIGHT_K * sample.gyroMagnitude * sample.gyroMagnitude)
-            totalWeight += w
-            weightedGx += w * sample.gravity.x
-            weightedGy += w * sample.gravity.y
-            weightedGz += w * sample.gravity.z
-        }
-
-        if (totalWeight < 1e-9) {
-            Log.w("MainActivity", "All rolling-buffer samples had near-zero weight (constant motion)")
-            // Fall back to simple mean
-            val avgG = SensorCalibrator.Vec3(
-                snapshot.map { it.gravity.x.toDouble() }.average().toFloat(),
-                snapshot.map { it.gravity.y.toDouble() }.average().toFloat(),
-                snapshot.map { it.gravity.z.toDouble() }.average().toFloat()
-            )
-            Log.d("MainActivity", "Stopped pitch averaging. Fallback mean from ${snapshot.size} samples.")
-            return avgG
-        }
-
-        val avgGravity = SensorCalibrator.Vec3(
-            (weightedGx / totalWeight).toFloat(),
-            (weightedGy / totalWeight).toFloat(),
-            (weightedGz / totalWeight).toFloat()
-        )
-
-        Log.d("MainActivity", "Stopped pitch averaging. Gyro-gated avg from ${snapshot.size} samples, totalWeight=%.2f".format(totalWeight))
-        return avgGravity
+        val snapshot = selectWindow(exposure) ?: return null
+        val agg = aggregate(snapshot) ?: return null
+        Log.d("MainActivity",
+            "Gravity from ${snapshot.size} samples over ${describe(exposure)}, weight=%.2f"
+                .format(agg.totalWeight))
+        return agg.calibrated
     }
 
     /** Raw (non-sphere-fit) gravity snapshot used only by affine 1-Shot calibration. */
@@ -588,60 +558,117 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     /**
      * Companion to [stopPitchAveraging] for the affine 1-Shot calibration only.
-     * Applies the identical gyro-gated weighting over the identical recent window,
-     * but to the RAW accelerometer direction/magnitude retained in the buffer.
-     * Read-only over the rolling buffer; does not alter any averaging state, so it
-     * is safe to call immediately after stopPitchAveraging() on the same shot.
+     * Same window, same gyro weighting, but over the RAW accelerometer
+     * direction/magnitude. Read-only; safe to call right after
+     * stopPitchAveraging() for the same shot.
      */
-    fun snapshotRawGravityForCalibration(): RawGravitySnapshot? {
-        val snapshot: List<StabilityWeightedSample>
-        synchronized(rollingBuffer) {
-            val allSamples = rollingBuffer.toList()
-            val GRAVITY_WINDOW_SAMPLES = 25
-            snapshot = if (allSamples.size > GRAVITY_WINDOW_SAMPLES) {
-                allSamples.takeLast(GRAVITY_WINDOW_SAMPLES)
-            } else {
-                allSamples
+    fun snapshotRawGravityForCalibration(exposure: ExposureWindow? = null): RawGravitySnapshot? {
+        val snapshot = selectWindow(exposure) ?: return null
+        val agg = aggregate(snapshot) ?: return null
+        val d = agg.raw
+        val dMag = d.magnitude()
+        if (dMag <= 1e-6f) return null
+        return RawGravitySnapshot(
+            SensorCalibrator.Vec3(d.x / dMag, d.y / dMag, d.z / dMag),
+            agg.rawMagnitude
+        )
+    }
+
+    /**
+     * Picks the rolling-buffer samples that actually overlap the exposure.
+     *
+     * Previously both callers took "the last 25 samples at the moment of the
+     * call", but that call happens once the JPEG has been encoded and written —
+     * several hundred ms AFTER the photons landed. The averaging window could
+     * therefore miss the exposure entirely. For a hand-held phone drifting even
+     * 0.5 deg/s that is a systematic attitude error in whichever direction the
+     * user's arms are tiring, and 1 deg of attitude is 60 nmi of position.
+     *
+     * With a real shutter timestamp we select [start, end] instead. Samples are
+     * timestamped on the same SystemClock.elapsedRealtimeNanos base as the
+     * shutter callback. Falls back to the old "most recent" behaviour when no
+     * window is available or the window caught too few samples (very short
+     * exposures can span fewer than a couple of sensor ticks).
+     */
+    private fun selectWindow(exposure: ExposureWindow?): List<StabilityWeightedSample>? {
+        val all: List<StabilityWeightedSample>
+        synchronized(rollingBuffer) { all = rollingBuffer.toList() }
+        if (all.isEmpty()) {
+            Log.d("MainActivity", "Rolling buffer empty.")
+            return null
+        }
+        if (exposure != null) {
+            val inWindow = all.filter {
+                it.timestampNs in exposure.startNs..exposure.endNs
+            }
+            if (inWindow.size >= MIN_EXPOSURE_WINDOW_SAMPLES) return inWindow
+            // Too few in-window samples: widen symmetrically about the exposure
+            // midpoint rather than silently reverting to a stale window.
+            val mid = (exposure.startNs + exposure.endNs) / 2
+            val widened = all.sortedBy { kotlin.math.abs(it.timestampNs - mid) }
+                .take(GRAVITY_WINDOW_SAMPLES)
+            if (widened.isNotEmpty()) {
+                Log.d("MainActivity",
+                    "Only ${inWindow.size} samples inside exposure; widened to ${widened.size} " +
+                        "nearest the midpoint")
+                return widened
             }
         }
-        if (snapshot.isEmpty()) return null
-
-        var totalWeight = 0.0
-        var wx = 0.0; var wy = 0.0; var wz = 0.0; var wMag = 0.0
-        for (sample in snapshot) {
-            val w = exp(-GYRO_WEIGHT_K * sample.gyroMagnitude * sample.gyroMagnitude)
-            totalWeight += w
-            wx += w * sample.rawGravity.x
-            wy += w * sample.rawGravity.y
-            wz += w * sample.rawGravity.z
-            wMag += w * sample.rawMagnitude
-        }
-
-        val dir: SensorCalibrator.Vec3
-        val mag: Double
-        if (totalWeight < 1e-9) {
-            dir = SensorCalibrator.Vec3(
-                snapshot.map { it.rawGravity.x.toDouble() }.average().toFloat(),
-                snapshot.map { it.rawGravity.y.toDouble() }.average().toFloat(),
-                snapshot.map { it.rawGravity.z.toDouble() }.average().toFloat()
-            )
-            mag = snapshot.map { it.rawMagnitude.toDouble() }.average()
-        } else {
-            dir = SensorCalibrator.Vec3(
-                (wx / totalWeight).toFloat(),
-                (wy / totalWeight).toFloat(),
-                (wz / totalWeight).toFloat()
-            )
-            mag = wMag / totalWeight
-        }
-        // rawGravity is already a unit vector from the fusion filter; if a legacy
-        // sample slipped through un-normalized, guard the direction here.
-        val dMag = dir.magnitude()
-        val unitDir = if (dMag > 1e-6f) {
-            SensorCalibrator.Vec3(dir.x / dMag, dir.y / dMag, dir.z / dMag)
-        } else return null
-        return RawGravitySnapshot(unitDir, mag)
+        return if (all.size > GRAVITY_WINDOW_SAMPLES) all.takeLast(GRAVITY_WINDOW_SAMPLES) else all
     }
+
+    private class Aggregate(
+        val calibrated: SensorCalibrator.Vec3,
+        val raw: SensorCalibrator.Vec3,
+        val rawMagnitude: Double,
+        val totalWeight: Double
+    )
+
+    /**
+     * Gyro-stability-weighted mean over a set of samples: w = exp(-k*|omega|^2),
+     * so readings from the quietest instants dominate and ship sway / hand
+     * tremor is suppressed. Falls back to an unweighted mean under constant
+     * motion, where every weight underflows.
+     */
+    private fun aggregate(samples: List<StabilityWeightedSample>): Aggregate? {
+        if (samples.isEmpty()) return null
+        var tw = 0.0
+        var cx = 0.0; var cy = 0.0; var cz = 0.0
+        var rx = 0.0; var ry = 0.0; var rz = 0.0; var rm = 0.0
+        for (s in samples) {
+            val w = exp(-GYRO_WEIGHT_K * s.gyroMagnitude * s.gyroMagnitude)
+            tw += w
+            cx += w * s.gravity.x; cy += w * s.gravity.y; cz += w * s.gravity.z
+            rx += w * s.rawGravity.x; ry += w * s.rawGravity.y; rz += w * s.rawGravity.z
+            rm += w * s.rawMagnitude
+        }
+        if (tw < 1e-9) {
+            Log.w("MainActivity", "All samples had near-zero gyro weight (constant motion)")
+            return Aggregate(
+                SensorCalibrator.Vec3(
+                    samples.map { it.gravity.x.toDouble() }.average().toFloat(),
+                    samples.map { it.gravity.y.toDouble() }.average().toFloat(),
+                    samples.map { it.gravity.z.toDouble() }.average().toFloat()
+                ),
+                SensorCalibrator.Vec3(
+                    samples.map { it.rawGravity.x.toDouble() }.average().toFloat(),
+                    samples.map { it.rawGravity.y.toDouble() }.average().toFloat(),
+                    samples.map { it.rawGravity.z.toDouble() }.average().toFloat()
+                ),
+                samples.map { it.rawMagnitude.toDouble() }.average(),
+                0.0
+            )
+        }
+        return Aggregate(
+            SensorCalibrator.Vec3((cx / tw).toFloat(), (cy / tw).toFloat(), (cz / tw).toFloat()),
+            SensorCalibrator.Vec3((rx / tw).toFloat(), (ry / tw).toFloat(), (rz / tw).toFloat()),
+            rm / tw, tw
+        )
+    }
+
+    private fun describe(e: ExposureWindow?): String =
+        if (e == null) "most recent samples"
+        else "exposure window (%.0f ms)".format((e.endNs - e.startNs) / 1e6)
 
     /**
      * Affine-corrected "up" for the current 1-Shot shot, or null if no validated
@@ -650,9 +677,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
      * Reconstructs the true raw acceleration a = mag · direction and applies
      * up = normalize(A · a + b). Call right after stopPitchAveraging().
      */
-    fun getOneshotAffineUp(): SensorCalibrator.Vec3? {
+    fun getOneshotAffineUp(exposure: ExposureWindow? = null): SensorCalibrator.Vec3? {
         if (!sensorCalibrator.hasValidAffine()) return null
-        val snap = snapshotRawGravityForCalibration() ?: return null
+        val snap = snapshotRawGravityForCalibration(exposure) ?: return null
         val aRaw = SensorCalibrator.Vec3(
             (snap.direction.x * snap.magnitude).toFloat(),
             (snap.direction.y * snap.magnitude).toFloat(),

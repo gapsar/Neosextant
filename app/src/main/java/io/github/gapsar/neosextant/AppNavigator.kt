@@ -32,7 +32,7 @@ fun AppNavigator(
     getRawPitch: () -> Double?,
     getRawRoll: () -> Double?,
     startPitchAveraging: () -> Unit,
-    stopPitchAveraging: () -> SensorCalibrator.Vec3?,
+    stopPitchAveraging: (MainActivity.ExposureWindow?) -> SensorCalibrator.Vec3?,
     // Calibration
     saveCalibrationOffset: (Double, Double) -> Unit,
     getCalibrationOffset: () -> Double,
@@ -41,8 +41,8 @@ fun AppNavigator(
     getOneshotCalibrationOffset: () -> Double,
     getOneshotRollOffset: () -> Double,
     // Affine 1-Shot calibration
-    snapshotRawGravity: () -> MainActivity.RawGravitySnapshot? = { null },
-    getOneshotAffineUp: () -> SensorCalibrator.Vec3? = { null },
+    snapshotRawGravity: (MainActivity.ExposureWindow?) -> MainActivity.RawGravitySnapshot? = { null },
+    getOneshotAffineUp: (MainActivity.ExposureWindow?) -> SensorCalibrator.Vec3? = { null },
     sensorCalibrator: SensorCalibrator,
     sensorPipeline: SensorPipeline,
     rawAccelState: State<SensorCalibrator.Vec3>,

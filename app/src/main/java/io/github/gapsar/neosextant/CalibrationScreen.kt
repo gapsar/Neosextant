@@ -57,8 +57,8 @@ fun CalibrationScreen(
     rawAccelState: State<SensorCalibrator.Vec3>,
     solverMode: SolverMode,
     startPitchAveraging: () -> Unit,
-    stopPitchAveraging: () -> SensorCalibrator.Vec3?,
-    snapshotRawGravity: () -> MainActivity.RawGravitySnapshot? = { null },
+    stopPitchAveraging: (MainActivity.ExposureWindow?) -> SensorCalibrator.Vec3?,
+    snapshotRawGravity: (MainActivity.ExposureWindow?) -> MainActivity.RawGravitySnapshot? = { null },
     onSaveOneshotCalibration: (Double, Double) -> Unit,
     currentOneshotPitchOffset: Double,
     currentOneshotRollOffset: Double,
@@ -440,14 +440,22 @@ fun CalibrationScreen(
                                 // Start sensor pitch/gyro averaging
                                 startPitchAveraging()
 
-                                captureCalibrationPhoto(context, imageCapture, onImageCaptured = { uri, path ->
-                                    // Timestamp at shutter: the plate solve below can take many seconds,
-                                    // and the expected zenith rotates ~15 arcsec per second of delay.
-                                    val captureTime = TimeSynchronizer.getTrueTime()
-                                    val avgGravity = stopPitchAveraging()
+                                captureCalibrationPhoto(context, imageCapture, onImageCaptured = { uri, path, shutterNs ->
+                                    // Anchor to the EXPOSURE, not to this callback: the JPEG encode and
+                                    // file write land here several hundred ms after the photons did, and
+                                    // the expected zenith rotates ~15 arcsec per second of delay.
+                                    val exposureWindow = shutterNs?.let { start ->
+                                        val durNs = if (supportsManualExposure)
+                                            exposureTimeMs * 1_000_000L else 0L
+                                        MainActivity.ExposureWindow(start, start + durNs)
+                                    }
+                                    val captureTime = exposureWindow?.let {
+                                        TimeSynchronizer.getTrueTimeAtElapsedNanos(it.midpointNs)
+                                    } ?: TimeSynchronizer.getTrueTime()
+                                    val avgGravity = stopPitchAveraging(exposureWindow)
                                     // Raw (non-sphere-fit) gravity snapshot for the SAME shot, used only
-                                    // for the affine fit. Captured here so it reflects the same window.
-                                    val rawSnap = snapshotRawGravity()
+                                    // for the affine fit. Same window, so the two agree.
+                                    val rawSnap = snapshotRawGravity(exposureWindow)
                                     if (avgGravity == null) {
                                         isCalibrating = false
                                         statusMessage = "Error: gravity vector not captured."
@@ -668,7 +676,7 @@ fun CalibrationScreen(
                                         }
                                     }
                                 }, onError = { exc ->
-                                    stopPitchAveraging()
+                                    stopPitchAveraging(null)
                                     isCalibrating = false
                                     statusMessage = "$calibrationFailedStr: ${exc.message}"
                                 })
@@ -843,7 +851,7 @@ fun CalibrationScreen(
 private fun captureCalibrationPhoto(
     context: Context,
     imageCapture: ImageCapture,
-    onImageCaptured: (Uri, String) -> Unit,
+    onImageCaptured: (Uri, String, Long?) -> Unit,
     onError: (ImageCaptureException) -> Unit
 ) {
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
@@ -855,10 +863,18 @@ private fun captureCalibrationPhoto(
 
     val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
+    // Both callbacks are delivered on the main executor, so no synchronisation needed.
+    var shutterNs: Long? = null
+
     imageCapture.takePicture(
         outputOptions,
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageSavedCallback {
+            // Shutter open, not file written — see CaptureResult in CameraView.
+            override fun onCaptureStarted() {
+                shutterNs = android.os.SystemClock.elapsedRealtimeNanos()
+            }
+
             override fun onError(exc: ImageCaptureException) {
                 Log.e("CalibrationScreen", "Photo capture failed: ${exc.message}", exc)
                 onError(exc)
@@ -866,7 +882,7 @@ private fun captureCalibrationPhoto(
 
             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                 val savedUri = Uri.fromFile(photoFile)
-                onImageCaptured(savedUri, photoFile.absolutePath)
+                onImageCaptured(savedUri, photoFile.absolutePath, shutterNs)
             }
         })
 }
