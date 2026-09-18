@@ -492,6 +492,8 @@ fun CameraView(
                 val chars = cameraManager.getCameraCharacteristics(cameraId)
                 val facing = chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
                 if (facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK) {
+                    // Whether SENSOR_TIMESTAMP is on the elapsedRealtime base.
+                    ShutterClock.configure(chars)
                     val jsonObj = org.json.JSONObject()
                     
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
@@ -1107,9 +1109,78 @@ fun CameraView(
  * LIMITED hardware still produces usable captures.
  */
 @OptIn(ExperimentalCamera2Interop::class)
+/**
+ * Exposure start reported by the camera itself.
+ *
+ * ImageCapture.onCaptureStarted is NOT the shutter instant: measured on a Pixel
+ * 8a it fires 166-193 ms before onImageSaved while the exposure alone is 250 ms,
+ * i.e. near the END of integration. Camera2's CaptureCallback.onCaptureStarted
+ * carries the sensor's own SENSOR_TIMESTAMP for the start of exposure, which is
+ * the only trustworthy anchor.
+ */
+object ShutterClock {
+    @Volatile private var lastSensorTimestampNs: Long = 0L
+    @Volatile private var timestampIsRealtime: Boolean = false
+    @Volatile var lastFrameNumber: Long = -1L
+        private set
+
+    val captureCallback = object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureStarted(
+            session: android.hardware.camera2.CameraCaptureSession,
+            request: android.hardware.camera2.CaptureRequest,
+            timestamp: Long,
+            frameNumber: Long
+        ) {
+            lastSensorTimestampNs = timestamp
+            lastFrameNumber = frameNumber
+        }
+    }
+
+    /** Record whether SENSOR_TIMESTAMP shares the elapsedRealtime base. */
+    fun configure(characteristics: android.hardware.camera2.CameraCharacteristics) {
+        val src = characteristics.get(
+            android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+        timestampIsRealtime = src ==
+            android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+        Log.d("ShutterClock", "SENSOR_INFO_TIMESTAMP_SOURCE=$src realtime=$timestampIsRealtime")
+    }
+
+    /**
+     * Most recent exposure start, converted to the elapsedRealtimeNanos base the
+     * sensor rolling buffer uses. Null if nothing captured yet.
+     *
+     * When the sensor clock is UNKNOWN it runs on the monotonic uptime base,
+     * which stops during deep sleep, so it is rebased via the current offset
+     * between the two clocks rather than used directly.
+     */
+    fun lastExposureStartElapsedNs(): Long? {
+        val ts = lastSensorTimestampNs
+        if (ts == 0L) return null
+        val elapsed = if (timestampIsRealtime) {
+            ts
+        } else {
+            val uptimeNs = android.os.SystemClock.uptimeMillis() * 1_000_000L
+            ts + (android.os.SystemClock.elapsedRealtimeNanos() - uptimeNs)
+        }
+        // Plausibility: the frame we want started within the last few seconds.
+        // Anything else means the callback is reporting frames we did not expect
+        // (or an unconvertible clock), so decline rather than anchor the whole
+        // gravity average to a bogus instant.
+        val ageNs = android.os.SystemClock.elapsedRealtimeNanos() - elapsed
+        if (ageNs < 0 || ageNs > MAX_SHUTTER_AGE_NS) {
+            Log.w("ShutterClock", "Exposure timestamp ${ageNs / 1_000_000} ms old; ignoring")
+            return null
+        }
+        return elapsed
+    }
+
+    private const val MAX_SHUTTER_AGE_NS = 5_000_000_000L
+}
+
 fun buildAstroImageCapture(iso: Int, exposureTimeMs: Int, supportsManualExposure: Boolean): ImageCapture {
     val builder = ImageCapture.Builder()
     val extender = Camera2Interop.Extender(builder)
+    extender.setSessionCaptureCallback(ShutterClock.captureCallback)
 
     if (supportsManualExposure) {
         // Manual Exposure
@@ -1242,11 +1313,12 @@ suspend fun takePhotoSuspend(
         outputOptions,
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageSavedCallback {
-            // Fires when the camera begins the exposure, NOT when the file has
-            // been encoded and written. onImageSaved can trail it by hundreds of
-            // ms, which is why the gravity window must be anchored here.
+            // Take the camera's own SENSOR_TIMESTAMP for this frame rather than
+            // the wall clock here: this callback lands near the END of
+            // integration, not at shutter open.
             override fun onCaptureStarted() {
-                shutterNs = android.os.SystemClock.elapsedRealtimeNanos()
+                shutterNs = ShutterClock.lastExposureStartElapsedNs()
+                    ?: android.os.SystemClock.elapsedRealtimeNanos()
             }
 
             override fun onError(exc: ImageCaptureException) {

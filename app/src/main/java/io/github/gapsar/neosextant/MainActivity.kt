@@ -544,9 +544,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         isAveragingPitch = false
         val snapshot = selectWindow(exposure) ?: return null
         val agg = aggregate(snapshot) ?: return null
+        // Lag is how stale the old "most recent samples" window would have been:
+        // the gap between the exposure midpoint and the moment this runs, which
+        // is the JPEG encode + file write tail. Logged because it is the size of
+        // the error this window selection removes, and it is device-specific.
+        val lagMs = exposure?.let {
+            (android.os.SystemClock.elapsedRealtimeNanos() - it.midpointNs) / 1e6
+        }
         Log.d("MainActivity",
-            "Gravity from ${snapshot.size} samples over ${describe(exposure)}, weight=%.2f"
-                .format(agg.totalWeight))
+            "Gravity from ${snapshot.size} samples over ${describe(exposure)}, weight=%.2f%s"
+                .format(agg.totalWeight,
+                    lagMs?.let { ", exposure ended %.0f ms ago".format(it) } ?: ""))
         return agg.calibrated
     }
 
