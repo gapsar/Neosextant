@@ -136,7 +136,6 @@ threading.Thread(target=_refresh_iers_background, daemon=True).start()
 
 T3_INSTANCE = None
 INITIALIZATION_ERROR = None
-USE_PER_IMAGE_SELF_CALIBRATION = False
 
 # EXIF orientation tag values -> PIL transpose operations (same mapping as
 # ImageOps.exif_transpose). Applied manually because exif_transpose also
@@ -644,26 +643,11 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         if dist is None:
             dist = camera_info.get("radial_distortion")
             
-        first_solve_centroids = []
-        # Step 3: Gate off Step 0 pre-correction
-        if False and dist and len(dist) >= 5:
-            k1_init, k2_init, k3_init, p1_init, p2_init = dist[:5]
-            for y, x in centroids_list:
-                nx = (x - cx) / fx
-                ny = (y - cy) / fy
-                r2 = nx*nx + ny*ny
-                r4 = r2*r2
-                r6 = r4*r2
-                radial = 1 + k1_init*r2 + k2_init*r4 + k3_init*r6
-                dx = nx * radial + 2*p1_init*nx*ny + p2_init*(r2 + 2*nx*nx)
-                dy = ny * radial + p1_init*(r2 + 2*ny*ny) + 2*p2_init*nx*ny
-                
-                corr_x = dx * fx + cx
-                corr_y = dy * fy + cy
-                first_solve_centroids.append([corr_y, corr_x])
-            print("Python: Pre-corrected centroids using Camera2 LENS_DISTORTION.")
-        else:
-            first_solve_centroids = list(centroids_list)
+        # Camera2 LENS_DISTORTION pre-correction was tried and gated off: the
+        # frozen k1/k2 fit below (Step 0b) superseded it and the two together
+        # double-corrected. The metadata is still parsed above because the
+        # intrinsics feed the principal point.
+        first_solve_centroids = list(centroids_list)
 
         # Step 0b: Frozen lens calibration. Two-term radial undistortion
         # (k1/k2 from the active calibration: shipped Pixel 8a fit from 960
@@ -710,134 +694,6 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         centroids_to_return = first_solve_centroids
         
         if solution.get('RA') is not None:
-            if USE_PER_IMAGE_SELF_CALIBRATION:
-                # Step 2: Fit distortion from matches
-                matched_centroids_raw = solution.get('matched_centroids', [])
-                matched_stars_data = solution.get('matched_stars', [])
-                
-                ra_deg = solution.get('RA')
-                dec_deg = solution.get('Dec')
-                roll_deg = solution.get('Roll')
-                fov_deg = solution.get('FOV')
-                
-                # Reconstruct Rotation matrix R (ICRS to Camera)
-                ra_rad = np.radians(ra_deg)
-                dec_rad = np.radians(dec_deg)
-                roll_rad = np.radians(roll_deg)
-                
-                cos_ra, sin_ra = np.cos(ra_rad), np.sin(ra_rad)
-                cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
-                cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
-                
-                b = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
-                E = np.array([-sin_ra, cos_ra, 0.0])
-                N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
-                up = cos_roll * N + sin_roll * E
-                left = np.cross(up, b)
-                
-                R = np.array([b, left, up])
-                
-                # Calculate focal length in pixels using FOV
-                fit_fx = (orig_width / 2.0) / np.tan(np.radians(fov_deg) / 2.0)
-                fit_fy = fit_fx
-                fit_cx = orig_width / 2.0
-                fit_cy = orig_height / 2.0
-                
-                matched_uncorrected = []
-                expected_positions = []
-                
-                for i in range(len(matched_centroids_raw)):
-                    my_y, my_x = matched_centroids_raw[i]
-                    # Find closest in first_solve_centroids to get original
-                    dists = [(my_y - c[0])**2 + (my_x - c[1])**2 for c in first_solve_centroids]
-                    best_idx = np.argmin(dists)
-                    orig_y, orig_x = centroids_list[best_idx]
-                    matched_uncorrected.append((orig_y, orig_x))
-                    
-                    # Compute expected position
-                    s_ra = np.radians(matched_stars_data[i][0])
-                    s_dec = np.radians(matched_stars_data[i][1])
-                    s_v = np.array([np.cos(s_dec)*np.cos(s_ra), np.cos(s_dec)*np.sin(s_ra), np.sin(s_dec)])
-                    
-                    s_cam = R @ s_v
-                    vz = s_cam[0]
-                    vx = -s_cam[1]
-                    vy = -s_cam[2]
-                    
-                    x_exp = fit_fx * (vx / vz) + fit_cx
-                    y_exp = fit_fy * (vy / vz) + fit_cy
-                    expected_positions.append((y_exp, x_exp))
-                    
-                # Least squares for k1, k2
-                A = []
-                B = []
-                for i in range(len(matched_uncorrected)):
-                    y_meas, x_meas = matched_uncorrected[i]
-                    y_exp, x_exp = expected_positions[i]
-                    
-                    dx_p = x_exp - fit_cx
-                    dy_p = y_exp - fit_cy
-                    r = np.sqrt(dx_p*dx_p + dy_p*dy_p)
-                    r2 = r*r
-                    r4 = r2*r2
-                    
-                    A.append([dx_p * r2, dx_p * r4])
-                    B.append(x_meas - x_exp)
-                    
-                    A.append([dy_p * r2, dy_p * r4])
-                    B.append(y_meas - y_exp)
-                    
-                A = np.array(A)
-                B = np.array(B)
-                
-                num_matches = len(matched_uncorrected)
-                k1_fit, k2_fit = 0.0, 0.0
-                skip_second_solve = False
-                
-                if num_matches >= 8:
-                    res, residuals, _, _ = np.linalg.lstsq(A, B, rcond=None)
-                    k1_fit, k2_fit = res[0], res[1]
-                elif num_matches >= 4:
-                    A1 = A[:, 0:1]
-                    res, residuals, _, _ = np.linalg.lstsq(A1, B, rcond=None)
-                    k1_fit = res[0]
-                else:
-                    print("Python: Not enough matches for self-calibration, skipping second solve.")
-                    skip_second_solve = True
-                    
-                if not skip_second_solve:
-                    print(f"Python: Self-calibration fitted k1={k1_fit:e}, k2={k2_fit:e} from {num_matches} matches")
-                    
-                    # Step 3: Undistort all centroids and re-solve
-                    final_centroids = []
-                    for y, x in centroids_list:
-                        dx_p = x - fit_cx
-                        dy_p = y - fit_cy
-                        r = np.sqrt(dx_p*dx_p + dy_p*dy_p)
-                        scale = 1 + k1_fit*(r**2) + k2_fit*(r**4)
-                        x_corr = fit_cx + dx_p / scale
-                        y_corr = fit_cy + dy_p / scale
-                        final_centroids.append([y_corr, x_corr])
-                        
-                    centroids_to_return = final_centroids
-                    
-                    # Pass distortion=None to disable tetra3's internal single-parameter distortion
-                    solution2 = T3_INSTANCE.solve_from_centroids(
-                        final_centroids,
-                        (orig_height, orig_width),
-                        fov_estimate=fov_deg,
-                        solve_timeout=10000,
-                        return_matches=True,
-                        distortion=None
-                    )
-                    
-                    if solution2.get('RA') is not None:
-                        print("Python: Second (refined) solve successful.")
-                        solution = solution2
-                    else:
-                        print("Python: Second solve failed, falling back to first solve.")
-                        centroids_to_return = first_solve_centroids
-
             # Build matched star info with names from HIP lookup
             matched_star_list = []
             matched_centroids_raw = solution.get('matched_centroids', [])
@@ -913,24 +769,6 @@ def _calculate_dip_correction_deg(height_of_eye_m):
     # Formula: dip in arcminutes = 1.758 * sqrt(height in meters)
     dip_arcmin = 1.758 * math.sqrt(float(height_of_eye_m))
     return dip_arcmin / 60.0
-
-def _calculate_gp(ra, dec, observation_time):
-    """
-    Calculates the Geographic Position (GP) of the star at the given time.
-    Returns (lat_deg, lon_deg) where longitude is East-positive.
-    """
-    # GP Latitude = Declination
-    gp_lat = dec
-
-    # GP Longitude (East positive) = RA - GST
-    # GST is the Greenwich Sidereal Time (angle of Aries relative to Greenwich)
-    # RA is the Right Ascension (angle of Star relative to Aries)
-    # Longitude (East +) = RA - GST
-    gst = observation_time.sidereal_time('mean', 'greenwich')
-    gp_lon = ra - gst.deg
-    gp_lon = (gp_lon + 180) % 360 - 180
-    return gp_lat, gp_lon
-
 
 def lop_compute(
     ra_from_image,
@@ -1011,91 +849,8 @@ def lop_compute(
         return json.dumps({'error': error_msg})
 
 
-# =============================================================================
 # SECTION 3: POSITION FIX CALCULATION
 # =============================================================================
-
-def lop_center_compute(lop_1_json, lop_2_json, lop_3_json, estimated_latitude, estimated_longitude):
-    """
-    Calculates the final position fix from three LOPs using the method of least squares.
-    This method finds the point that is closest to all three lines of position, which
-    corresponds to the center of the small triangle formed by their intersections.
-
-    Args:
-        lop_1_json (str): JSON string result from the first lop_compute call.
-        lop_2_json (str): JSON string result from the second lop_compute call.
-        lop_3_json (str): JSON string result from the third lop_compute call.
-        estimated_latitude (float): The assumed latitude used for the LOP calculations.
-        estimated_longitude (float): The assumed longitude used for the LOP calculations.
-
-    Returns:
-        str: A JSON string with the calculated fix or an error message.
-    """
-    print("Python: lop_center_compute called.")
-    try:
-        # --- 1. Parse LOP data from JSON ---
-        lops = [json.loads(lop_json) for lop_json in [lop_1_json, lop_2_json, lop_3_json]]
-
-        # Check for errors in LOP data
-        for i, lop in enumerate(lops):
-            if lop.get('error') is not None:
-                raise ValueError(f"Error in LOP {i+1}: {lop['error']}")
-
-        intercepts = np.array([lop['intercept_nm'] for lop in lops])
-        azimuths_deg = np.array([lop['azimuth_deg'] for lop in lops])
-        azimuths_rad = np.deg2rad(azimuths_deg)
-
-        # --- 2. Solve for position correction using least squares ---
-        # We want to find a correction (d_east, d_north) in nautical miles from the
-        # assumed position. The equation for each LOP is:
-        # intercept = d_east * sin(azimuth) + d_north * cos(azimuth)
-
-        # Set up the matrix 'A' and vector 'b' for the system Ax = b
-        A = np.array([
-            [np.sin(az), np.cos(az)] for az in azimuths_rad
-        ])
-        b = intercepts
-
-        # Use numpy's least-squares solver to find x = [d_east, d_north]
-        correction, residuals, rank, s = np.linalg.lstsq(A, b, rcond=None)
-        d_east_nm, d_north_nm = correction[0], correction[1]
-
-        # --- 3. Apply correction to assumed position ---
-        # Convert corrections from nautical miles to degrees.
-        # 1 degree of latitude = 60 NM
-        # 1 degree of longitude = 60 * cos(latitude) NM
-        lat_correction_deg = d_north_nm / 60.0
-        lon_correction_deg = d_east_nm / (60.0 * np.cos(np.deg2rad(estimated_latitude)))
-
-        fixed_latitude = estimated_latitude + lat_correction_deg
-        fixed_longitude = estimated_longitude + lon_correction_deg
-
-        # --- 4. Estimate the error ---
-        # The residual is the sum of squared errors. A good error estimate is the
-        # Root Mean Square Error (RMSE) of the distances from the fix to each LOP.
-        if residuals.size > 0:
-            # The number of degrees of freedom is (number of LOPs - number of variables)
-            degrees_of_freedom = len(lops) - 2
-            if degrees_of_freedom > 0:
-                error_estimate_nm = np.sqrt(residuals[0] / degrees_of_freedom)
-            else:
-                error_estimate_nm = 0.0 # Cannot estimate error with 2 or fewer LOPs
-        else:
-            # If there are no residuals, the solution perfectly fits the LOPs (they intersect at one point).
-            error_estimate_nm = 0.0
-
-        result = {
-            "fixed_latitude": fixed_latitude,
-            "fixed_longitude": fixed_longitude,
-            "error_estimate_nm": error_estimate_nm
-        }
-        print(f"Python: Fix calculated: Lat={fixed_latitude:.4f}, Lon={fixed_longitude:.4f}")
-        return json.dumps(result)
-
-    except Exception as e:
-        error_msg = f"An exception occurred in lop_center_compute: {e}"
-        print(f"Python: {error_msg}\n{traceback.format_exc()}")
-        return json.dumps({'error': error_msg})
 
 
 def solve_lop_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.0, pressure_hpa=1013.25, temperature_c=15.0):
@@ -1543,48 +1298,6 @@ def _median_fix(lats, lons):
                  * 60.0 * abs(np.cos(np.radians(median_lat))) * MAD_TO_SIGMA)
     sigma_nm = float(np.sqrt(lat_sigma ** 2 + lon_sigma ** 2))
     return median_lat, median_lon, MEDIAN_SE_FACTOR * sigma_nm / np.sqrt(n)
-
-
-def solve_oneshot_multi(obs_list_json, pressure_hpa=1013.25, temperature_c=15.0):
-    """
-    Multi-shot 1-Shot solver: solves each observation independently
-    and returns the component-wise median position.
-
-    This is dramatically more accurate than a single fix because the median
-    is robust to outliers (bad plate-solve roll, sensor glitch, etc.).
-
-    obs_list_json: JSON string of list of dicts:
-       [{'ra':, 'dec':, 'roll':, 'gx':, 'gy':, 'gz':, 'time_iso':}, ...]
-
-    Returns JSON with: fixed_latitude, fixed_longitude, error_estimate_nm, num_fixes
-    On error: returns JSON with 'error' key.
-    """
-    try:
-        obs_list = json.loads(obs_list_json)
-
-        lats, lons = _solve_obs_group(obs_list, "Multi-shot",
-                                      pressure_hpa, temperature_c)
-
-        if len(lats) == 0:
-            return json.dumps({"error": "No valid fixes from any observation"})
-
-        median_lat, median_lon, spread_nm = _median_fix(lats, lons)
-
-        print(f"Python: Multi-shot MEDIAN from {len(lats)} fixes: Lat={median_lat:.4f}, Lon={median_lon:.4f}, spread={spread_nm:.2f} NM")
-
-        return json.dumps({
-            "fixed_latitude": median_lat,
-            "fixed_longitude": median_lon,
-            "error_estimate_nm": spread_nm,
-            "final_shift_nm": spread_nm,
-            "num_fixes": len(lats),
-            "individual_fixes": [{"lat": la, "lon": lo} for la, lo in zip(lats, lons)]
-        })
-
-    except Exception as e:
-        error_msg = f"Error in solve_oneshot_multi: {e}"
-        print(f"Python: {error_msg}\n{traceback.format_exc()}")
-        return json.dumps({"error": error_msg})
 
 
 def solve_oneshot_burst_multi(burst_groups_json, pressure_hpa=1013.25,

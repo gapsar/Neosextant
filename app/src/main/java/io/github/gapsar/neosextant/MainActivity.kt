@@ -54,10 +54,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val currentRawPhoneRollDeg = mutableStateOf<Double?>(null)
     val currentRawAccel = mutableStateOf(SensorCalibrator.Vec3(0f, 0f, 0f))
 
-    // Gyroscope-gated rolling buffer for ship-motion-compensated averaging.
-    // Continuously collects (altitude, gravity, gyroMag) tuples so that when
-    // the shutter fires, we can compute a stability-weighted average that
-    // favours readings from the quietest moments over the last ~3 seconds.
     /**
      * The interval the camera was actually integrating photons, on the
      * SystemClock.elapsedRealtimeNanos clock — the same base the rolling buffer
@@ -67,6 +63,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         val midpointNs: Long get() = (startNs + endNs) / 2
     }
 
+    // Gyroscope-gated rolling buffer for ship-motion-compensated averaging.
+    // Continuously collects (gravity, gyroMag, timestamp) tuples so that when the
+    // shutter fires we can weight the samples that actually overlap the exposure
+    // by how still the phone was.
     private data class StabilityWeightedSample(
         val gravity: SensorCalibrator.Vec3,
         val gyroMagnitude: Float,
@@ -115,9 +115,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             // Log result or handle denial
         }
-
-    // Legacy averaging flag (kept for compatibility; the rolling buffer does the real work)
-    @Volatile private var isAveragingPitch = false
 
     // H-04: Cached calibration offset to avoid SharedPreferences reads on sensor thread
     @Volatile var cachedCalibrationOffset: Double = 0.0
@@ -528,8 +525,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     fun startPitchAveraging() {
-        isAveragingPitch = true
-        Log.d("MainActivity", "Started pitch averaging (rolling buffer active)")
+        // The rolling buffer is maintained unconditionally in onSensorChanged, so
+        // there is nothing to switch on. Kept as the capture-path hook, and as the
+        // place to put anything that must happen before the shutter.
+        Log.d("MainActivity", "Pitch averaging window opened (rolling buffer is always active)")
     }
 
     /**
@@ -541,7 +540,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
      * during ship sway / hand tremor are suppressed.
      */
     fun stopPitchAveraging(exposure: ExposureWindow? = null): SensorCalibrator.Vec3? {
-        isAveragingPitch = false
         val snapshot = selectWindow(exposure) ?: return null
         val agg = aggregate(snapshot) ?: return null
         // Lag is how stale the old "most recent samples" window would have been:
