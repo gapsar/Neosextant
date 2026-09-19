@@ -158,16 +158,23 @@ def _apply_exif_orientation(img):
     """Rotates/flips pixels per the EXIF orientation tag WITHOUT rewriting the
     EXIF data (reading the tag is safe; re-serializing broken rationals is not).
     The stale EXIF is dropped from the result so nothing downstream re-applies it.
+
+    Returns (img, applied). `applied` must be used rather than comparing image
+    dimensions: orientations 2, 3 and 4 (mirror, 180 deg, flip) transpose the
+    pixels while leaving width and height unchanged, so a size comparison misses
+    them and cedar_cli would then read pixels in a different frame from the one
+    declared to the solver.
     """
     try:
         orientation = img.getexif().get(0x0112, 1)
     except Exception:
         orientation = 1
     method = _ORIENTATION_TRANSPOSES.get(orientation)
-    if method is not None:
-        img = img.transpose(method)
-        img.info.pop('exif', None)
-    return img
+    if method is None:
+        return img, False
+    img = img.transpose(method)
+    img.info.pop('exif', None)
+    return img, True
 
 # Solver parameters come from self_calibration.active_params(): the shipped
 # Pixel 8a calibration (desktop optimizer v3 run, 2026-07-08: database
@@ -497,39 +504,58 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
             # buffer we hand to cedar_cli agrees with the size we later declare
             # to the solver. Fall back to the width>height heuristic only when
             # there is no usable EXIF tag.
-            orig_size_before = (img.width, img.height)
-            img = _apply_exif_orientation(img)
-            if (img.width, img.height) == orig_size_before and img.width > img.height:
+            img, reoriented = _apply_exif_orientation(img)
+            if not reoriented and img.width > img.height:
                 print(f"Python: No EXIF orientation; image is landscape ({img.width}x{img.height}), "
                       f"rotating 90 deg to portrait.")
                 img = img.transpose(Image.ROTATE_90)
+                reoriented = True
 
-            if (img.width, img.height) != orig_size_before:
-                print(f"Python: Rotated image to {img.width}x{img.height} to correct orientation.")
-                # The pixels cedar_cli reads must match the rotation we just applied
+            if reoriented:
+                print(f"Python: Reoriented image to {img.width}x{img.height}.")
+                # The pixels cedar_cli reads must match the transpose we just applied
                 # in-memory, otherwise centroids end up in a different frame than the
                 # (orig_height, orig_width) we declare to the solver below. Persist the
-                # rotated image and point the CLI at that instead of the raw file.
+                # reoriented image and point the CLI at that instead of the raw file.
                 rotated_cedar_input_path = image_path + ".rotated.jpg"
                 img.save(rotated_cedar_input_path, quality=95)
 
             orig_width, orig_height = img.width, img.height
-            # H-12: Cap image resolution to avoid excessive memory usage
-            MAX_DIM = 4000
-            ratio = 1.0
-            if img.width > MAX_DIM or img.height > MAX_DIM:
-                ratio = min(MAX_DIM / img.width, MAX_DIM / img.height)
-                new_size = (int(img.width * ratio), int(img.height * ratio))
-                print(f"Python: Downscaling image from {img.width}x{img.height} to {new_size[0]}x{new_size[1]}")
-                img = img.resize(new_size, Image.LANCZOS)
-            img_gray = img.convert(mode='L')
-            np_image = np.asarray(img_gray, dtype=np.uint8)
-            height, width = np_image.shape
-        print(f"Python: Image loaded successfully ({width}x{height}).")
+        print(f"Python: Image loaded successfully ({orig_width}x{orig_height}).")
 
         centroids = []
 
         cedar_input_path = rotated_cedar_input_path or image_path
+
+        # The grayscale numpy array below is ONLY consumed by the tetra3 fallback,
+        # which runs when cedar_cli fails — i.e. almost never. Building it eagerly
+        # cost a LANCZOS downscale plus a full-resolution convert() on every frame,
+        # seven times per burst, for a result that was then thrown away.
+        # Deferred behind a closure so the cost is paid only when it is used.
+        MAX_DIM = 4000   # H-12: cap resolution to avoid excessive memory use
+        _fallback_cache = {}
+
+        def _fallback_centroids():
+            """Grayscale + downscale on demand, returning centroids in ORIGINAL
+            full-resolution coordinates. Reads cedar_input_path so it sees the
+            same pixels, in the same orientation, that cedar_cli was given."""
+            if "np" not in _fallback_cache:
+                with Image.open(cedar_input_path) as fb:
+                    ratio = 1.0
+                    if fb.width > MAX_DIM or fb.height > MAX_DIM:
+                        ratio = min(MAX_DIM / fb.width, MAX_DIM / fb.height)
+                        new_size = (int(fb.width * ratio), int(fb.height * ratio))
+                        print(f"Python: Downscaling image from {fb.width}x{fb.height} "
+                              f"to {new_size[0]}x{new_size[1]}")
+                        fb = fb.resize(new_size, Image.LANCZOS)
+                    _fallback_cache["ratio"] = ratio
+                    _fallback_cache["np"] = np.asarray(fb.convert(mode='L'), dtype=np.uint8)
+            ratio = _fallback_cache["ratio"]
+            cents = tetra3.get_centroids_from_image(_fallback_cache["np"])
+            if ratio != 1.0:
+                cents = [(c[0] / ratio, c[1] / ratio) for c in cents]
+            return cents
+
         print(f"Python: Extracting centroids using Cedar Detect CLI on {cedar_input_path}...")
         cedar_result = detect_centroids_cli(cedar_input_path)
 
@@ -538,9 +564,7 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
             if "output" in cedar_result:
                 print(f"Python: CLI output: {cedar_result['output']}")
             print("Python: Falling back to default Tetra3 extraction...")
-            centroids = tetra3.get_centroids_from_image(np_image)
-            if ratio != 1.0:
-                centroids = [(c[0] / ratio, c[1] / ratio) for c in centroids]
+            centroids = _fallback_centroids()
         else:
             # Cedar Detect CLI returns a dict with "stars" list of points
             # Each point has x, y, brightness
@@ -557,9 +581,7 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
                 print(f"Python: Cedar Detect found {len(centroids)} centroids.")
             else:
                 print("Python: Cedar Detect returned no stars data.")
-                centroids = tetra3.get_centroids_from_image(np_image)
-                if ratio != 1.0:
-                    centroids = [(c[0] / ratio, c[1] / ratio) for c in centroids]
+                centroids = _fallback_centroids()
 
         if len(centroids) == 0:
             print("Python: No centroids found in the image.")
