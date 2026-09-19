@@ -75,6 +75,10 @@ class SensorCalibrator(context: Context) {
         private const val KEY_AFFINE_A_PREFIX = "cal_affine_a_" // a_0..a_8
         private const val KEY_AFFINE_B_PREFIX = "cal_affine_b_" // b_0..b_2
 
+        /** Below this many recorded poses the per-axis scale is worse than
+         *  useless (see solveAlgebraicSphereFit); only the bias is applied. */
+        private const val MIN_POINTS_FOR_SCALE = 16
+
         private const val MAX_USES_BEFORE_WARNING = 5
         private const val MAX_DAYS_BEFORE_WARNING = 10
 
@@ -278,25 +282,51 @@ class SensorCalibrator(context: Context) {
         }
         val r = sqrt(rSquared)
 
-        // Derive per-axis scale: compute the range in each axis from the fitted sphere
-        // and scale to match the fitted radius R (not 9.81).
-        // This reshapes the measurement ellipsoid into a true sphere before
-        // normalization in SensorPipeline extracts the direction.
-        val targetR = r
+        // Per-axis scale, from the max-min RANGE of the recorded points.
+        //
+        // The sphere fit's CENTRE (bias) is a least-squares solve over all the
+        // points and is well conditioned even from a handful. The per-axis scale
+        // is not: it is an order statistic, so it only reaches the true semi-axis
+        // if the user happened to land exactly on that axis. With a sloppy
+        // hand-held pose the range falls short, scale = R/range comes out too
+        // large, and the correction pushes the vector the wrong way.
+        //
+        // Simulated over a plausible sensor (1.2%/0.7%/0.6% gain errors, ~0.05
+        // m/s2 bias) with poses up to 25 deg off each face, RMS direction error
+        // of the corrected gravity vector:
+        //
+        //   poses   uncorrected   bias + range scale   bias only
+        //       6       0.523            0.695           0.373
+        //       8       0.523            0.755           0.364
+        //      12       0.523            0.405           0.356
+        //      20       0.523            0.236           0.351
+        //      30       0.523            0.132           0.349
+        //
+        // The guided flow collects 8 poses, where applying the scale is WORSE
+        // than not calibrating at all. The scale only starts paying for itself
+        // around 16 poses. So it is applied only when there are enough points to
+        // estimate it, and otherwise left at unity - keeping the half of the fit
+        // that is trustworthy and dropping the half that is not.
+        //
+        // Recovering the gain terms properly is the affine model's job; it fits
+        // them jointly with cross-axis coupling and gates on conditioning.
+        var scaleX = 1f; var scaleY = 1f; var scaleZ = 1f
+        if (n >= MIN_POINTS_FOR_SCALE) {
+            val centeredX = recordedPoints.map { it.x - cx }
+            val centeredY = recordedPoints.map { it.y - cy }
+            val centeredZ = recordedPoints.map { it.z - cz }
 
-        // Per-axis effective radius: for each axis, the range of centered data gives the
-        // semi-axis length. For a perfect sphere they'd all equal R.
-        val centeredX = recordedPoints.map { it.x - cx }
-        val centeredY = recordedPoints.map { it.y - cy }
-        val centeredZ = recordedPoints.map { it.z - cz }
+            val rangeX = ((centeredX.maxOrNull() ?: r) - (centeredX.minOrNull() ?: -r)) / 2f
+            val rangeY = ((centeredY.maxOrNull() ?: r) - (centeredY.minOrNull() ?: -r)) / 2f
+            val rangeZ = ((centeredZ.maxOrNull() ?: r) - (centeredZ.minOrNull() ?: -r)) / 2f
 
-        val rangeX = ((centeredX.maxOrNull() ?: r) - (centeredX.minOrNull() ?: -r)) / 2f
-        val rangeY = ((centeredY.maxOrNull() ?: r) - (centeredY.minOrNull() ?: -r)) / 2f
-        val rangeZ = ((centeredZ.maxOrNull() ?: r) - (centeredZ.minOrNull() ?: -r)) / 2f
-
-        val scaleX = if (rangeX > 0.1f) targetR / rangeX else 1f
-        val scaleY = if (rangeY > 0.1f) targetR / rangeY else 1f
-        val scaleZ = if (rangeZ > 0.1f) targetR / rangeZ else 1f
+            if (rangeX > 0.1f) scaleX = r / rangeX
+            if (rangeY > 0.1f) scaleY = r / rangeY
+            if (rangeZ > 0.1f) scaleZ = r / rangeZ
+        } else {
+            Log.d("SensorCalibrator",
+                "Only $n points (<$MIN_POINTS_FOR_SCALE): bias-only fit, per-axis scale left at 1")
+        }
 
         val result = CalibrationParams(
             bias = Vec3(cx, cy, cz),
@@ -366,16 +396,19 @@ class SensorCalibrator(context: Context) {
         val biasY = (minY + maxY) / 2f
         val biasZ = (minZ + maxZ) / 2f
 
-        val targetG = 9.81f
-        val rangeX = (maxX - minX) / 2f
-        val rangeY = (maxY - minY) / 2f
-        val rangeZ = (maxZ - minZ) / 2f
-        // Use the average range as the pseudo-radius for scale normalization
-        val avgRange = (rangeX + rangeY + rangeZ) / 3f
-
-        val scaleX = if (rangeX > 0.1) avgRange / rangeX else 1f
-        val scaleY = if (rangeY > 0.1) avgRange / rangeY else 1f
-        val scaleZ = if (rangeZ > 0.1) avgRange / rangeZ else 1f
+        // Same caveat as the algebraic fit: these ranges are order statistics and
+        // only estimate the semi-axes if the poses actually reached them.
+        var scaleX = 1f; var scaleY = 1f; var scaleZ = 1f
+        if (recordedPoints.size >= MIN_POINTS_FOR_SCALE) {
+            val rangeX = (maxX - minX) / 2f
+            val rangeY = (maxY - minY) / 2f
+            val rangeZ = (maxZ - minZ) / 2f
+            // Use the average range as the pseudo-radius for scale normalization
+            val avgRange = (rangeX + rangeY + rangeZ) / 3f
+            if (rangeX > 0.1) scaleX = avgRange / rangeX
+            if (rangeY > 0.1) scaleY = avgRange / rangeY
+            if (rangeZ > 0.1) scaleZ = avgRange / rangeZ
+        }
 
         Log.d("SensorCalibrator", "Min-Max fallback: bias=($biasX,$biasY,$biasZ), scale=($scaleX,$scaleY,$scaleZ)")
         return CalibrationParams(bias = Vec3(biasX, biasY, biasZ), scale = Vec3(scaleX, scaleY, scaleZ))
