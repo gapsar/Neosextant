@@ -83,10 +83,19 @@ PROBE_MIN = 2              # probe solves needed before a full-window pass
 FOV_LADDER_SEARCH_FRAC = 0.05   # fov_max_error during ladder probing
 FOV_FROZEN_ERROR_FRAC = 0.015   # fov_max_error after freezing (Pixel 8a ratio)
 
+# A calibration pass loads tetra3 databases and re-solves dozens of stored
+# frames. Chaquopy runs one interpreter with one GIL, so a pass started while a
+# burst is still being processed competes directly with the frames the user is
+# waiting on. Only start one once the solver has been quiet for a while, which
+# in practice means the burst has finished.
+QUIET_PERIOD_S = 20.0
+
 _lock = threading.Lock()
 _running = False
 _cached_cal = None
 _cached_mtime = None
+_last_sample_time = 0.0   # time.time() of the most recent record_sample
+_sample_count = None      # cached line count, so the file is not re-read per frame
 
 
 def _storage_dir() -> Path:
@@ -103,6 +112,14 @@ def _storage_dir() -> Path:
             d = Path.home() / ".neosextant_selfcal"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _count_lines(path) -> int:
+    try:
+        with open(path) as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
 
 
 def _samples_path() -> Path:
@@ -143,19 +160,28 @@ def active_params() -> dict:
 def record_sample(centroids, width, height) -> int:
     """Append one frame's raw (pre-undistortion) centroids to the rolling
     store. Returns the total number of samples recorded so far."""
+    global _last_sample_time, _sample_count
     path = _samples_path()
     rec = {"t": time.time(), "w": int(width), "h": int(height),
            "c": [[float(y), float(x)] for y, x in centroids]}
     with _lock:
         with open(path, "a") as fh:
             fh.write(json.dumps(rec) + "\n")
-        n = sum(1 for _ in open(path))
+        # Counting by re-reading the whole file ran once per solved frame. Keep
+        # a running count instead and only touch the file when it is unknown.
+        if _sample_count is None:
+            _sample_count = _count_lines(path)
+        else:
+            _sample_count += 1
+        n = _sample_count
         if n > int(MAX_SAMPLES * 1.5):        # occasional trim, keep newest
-            lines = open(path).readlines()[-MAX_SAMPLES:]
+            with open(path) as fh:
+                lines = fh.readlines()[-MAX_SAMPLES:]
             tmp = path.with_suffix(".tmp")
             tmp.write_text("".join(lines))
             tmp.replace(path)
-            n = len(lines)
+            n = _sample_count = len(lines)
+        _last_sample_time = time.time()
     return n
 
 
@@ -166,9 +192,13 @@ def maybe_start_calibration() -> bool:
     with _lock:
         if _running:
             return False
-        try:
-            n = sum(1 for _ in open(_samples_path()))
-        except OSError:
+        # Do not compete with a burst that is still being solved.
+        idle = time.time() - _last_sample_time
+        if idle < QUIET_PERIOD_S:
+            return False
+        n = _sample_count if _sample_count is not None \
+            else _count_lines(_samples_path())
+        if n == 0:
             return False
         state = {}
         try:
@@ -195,7 +225,7 @@ def calibration_status() -> dict:
     except Exception:
         state = {"status": "uncalibrated"}
     try:
-        state["samples_recorded"] = sum(1 for _ in open(_samples_path()))
+        state["samples_recorded"] = _count_lines(_samples_path())
     except OSError:
         state["samples_recorded"] = 0
     state["running"] = _running
@@ -220,11 +250,12 @@ def _calibration_thread():
 def _load_samples():
     out = []
     try:
-        for line in open(_samples_path()):
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+        with open(_samples_path()) as fh:
+            for line in fh:
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
     except OSError:
         pass
     return out[-BOOTSTRAP_WINDOW:]
@@ -320,7 +351,7 @@ def run_calibration() -> dict:
     samples = _load_samples()
     n_total = 0
     try:
-        n_total = sum(1 for _ in open(_samples_path()))
+        n_total = _count_lines(_samples_path())
     except OSError:
         pass
     print(f"Python selfcal: pass starting on {len(samples)} samples")
