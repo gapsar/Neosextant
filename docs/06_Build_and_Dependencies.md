@@ -5,7 +5,7 @@
 * **JDK:** Version 17.
 * **Android SDK:** Compile SDK 36, Min SDK 25.
 * **Python:** Chaquopy installs its own Python environment (3.10), but you need Python installed locally if you wish to run the scripts independently.
-* **Rust Toolchain:** Required if you intend to modify and recompile `cedar-detect`.
+* **Rust Toolchain:** Required only if you intend to modify and recompile `cedar-detect` (from the fork, see below).
 
 ## Dependencies
 
@@ -29,4 +29,4 @@ Defined in `build.gradle.kts`, these are installed automatically by Chaquopy:
 3.  **Run:** Connect a physical device (Emulators may struggle with Sensor simulation and Camera inputs) and click Run.
 
 ## Note on Rust Compilation
-The `cedar-detect` source is included in the project. If you modify the Rust code, you must recompile the binaries and place the resulting `.so` files into the appropriate `jniLibs` folders, or configure a Cargo build task within Gradle (current setup assumes pre-built binaries or manual compilation).
+The `cedar-detect` source is not included in the project. It is in the fork [gapsar/cedar-detect](https://github.com/gapsar/cedar-detect). If you modify the Rust code, rebuild `cedar-cli` and copy it into `app/src/main/jniLibs/arm64-v8a/libcedar_cli.so`. Gradle uses this prebuilt binary and does not compile Rust. See [04_Native_Star_Detection.md](04_Native_Star_Detection.md).
