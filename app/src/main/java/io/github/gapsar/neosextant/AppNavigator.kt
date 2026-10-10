@@ -318,6 +318,7 @@ fun AppNavigator(
                 onSaveOneshotCalibration = saveOneshotCalibrationOffset,
                 currentOneshotPitchOffset = getOneshotCalibrationOffset(),
                 currentOneshotRollOffset = getOneshotRollOffset(),
+                session = vm.starCalibration,
                 iso = vm.iso.value,
                 exposureTimeMs = vm.exposureTimeMs.value,
                 supportsManualExposure = supportsManualExposure,

@@ -75,6 +75,49 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
     }
     val fixSolve = FixSolveState()
 
+    /**
+     * The star-calibration session. It lives here, not in the calibration
+     * screen, because an affine session is 24+ bursts across many attitudes:
+     * leaving the screen (settings, rotation) used to discard every pair.
+     * Cleared by the screen's Reset button or when the process dies.
+     */
+    class StarCalibrationSession {
+        val latDeg = mutableStateOf("")
+        val latMin = mutableStateOf("")
+        val latDir = mutableStateOf("N")
+        val lonDeg = mutableStateOf("")
+        val lonMin = mutableStateOf("")
+        val lonDir = mutableStateOf("E")
+        /** Legacy pitch/roll samples, averaged once REQUIRED_ONESHOT_SAMPLES are in. */
+        val oneshotPitchOffsets = mutableStateListOf<Double>()
+        val oneshotRollOffsets = mutableStateListOf<Double>()
+        /** Affine pairs, one JSON object per accepted burst: {meas, mag, exp}. */
+        val affinePairs = mutableStateListOf<String>()
+        val affineStatus = mutableStateOf("")
+        /** Calibrated gravity of the first accepted burst. */
+        var firstGravity: SensorCalibrator.Vec3? = null
+        /**
+         * True once a burst was taken at a clearly different attitude. From then
+         * on the session only feeds the affine fit: pitch/roll offsets fitted at
+         * one attitude are wrong at others, and saving them made the legacy
+         * 1-Shot path follow whichever attitude happened to come last.
+         */
+        val multiAttitude = mutableStateOf(false)
+        /** Tags every line of the shot log, so one session can be refitted offline. */
+        var sessionId = System.currentTimeMillis()
+
+        fun reset() {
+            oneshotPitchOffsets.clear()
+            oneshotRollOffsets.clear()
+            affinePairs.clear()
+            affineStatus.value = ""
+            firstGravity = null
+            multiAttitude.value = false
+            sessionId = System.currentTimeMillis()
+        }
+    }
+    val starCalibration = StarCalibrationSession()
+
     // --- Debug Sensor Logger ---
     var debugRawAccel = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")
     var debugRawGyro = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")

@@ -1563,6 +1563,17 @@ def solve_iterative(obs_list_json, estimated_lat, estimated_lon, height_m=0.0, p
         return json.dumps({"error": error_msg})
 
 
+# Residuals within this of the best count as an equally good fit when choosing
+# between the two branches of the pitch/roll solution (unit-vector chord length;
+# exact solutions differ only by float rounding, ~1e-16).
+CAL_BRANCH_TIE_TOL = 1e-6
+
+
+def _wrap_deg(a):
+    """Angle in degrees wrapped to [-180, 180)."""
+    return (float(a) + 180.0) % 360.0 - 180.0
+
+
 def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lon_deg,
                               time_iso, pressure_hpa=1013.25, temperature_c=15.0):
     """
@@ -1619,21 +1630,38 @@ def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lo
 
                     v_final = np.array([x_final, y_final, z_final])
                     err = np.linalg.norm(v_final - v_exp)
-                    candidates.append((err, np.degrees(theta_p), np.degrees(theta_r)))
+                    candidates.append((err, _wrap_deg(np.degrees(theta_p)),
+                                       _wrap_deg(np.degrees(theta_r))))
 
         if not candidates:
             return json.dumps({"error": "Failed to solve calibration rotation"})
 
-        # Pick candidate with smallest error
-        candidates.sort()
-        best_err, best_pitch_deg, best_roll_deg = candidates[0]
+        # Both branches are usually EXACT solutions: next to the real offset there
+        # is a mirror one with roll ~180 deg away (e.g. 0.3/-0.5 vs 116/180).
+        # Their residuals are both ~1e-16, so ranking by residual alone picked
+        # the mirror about half the time, and the +/-5 deg gate in the app then
+        # threw away a perfectly good shot. Among the solutions that fit, take
+        # the smallest rotation.
+        best_err = min(c[0] for c in candidates)
+        fitting = [c for c in candidates if c[0] <= best_err + CAL_BRANCH_TIE_TOL]
+        best_err, best_pitch_deg, best_roll_deg = min(
+            fitting, key=lambda c: abs(c[1]) + abs(c[2]))
 
         if best_err > 0.15:
             return json.dumps({"error": f"Calibration solution has high error: {best_err:.4f}"})
 
+        # The real angle between the two vectors. Unlike the pitch/roll pair it
+        # stays meaningful in every attitude: with the phone in landscape
+        # (gravity along the sensor x axis) both rotations move gravity the same
+        # way, so a 0.4 deg misalignment decomposes into ~6 deg of pitch AND
+        # ~7 deg of roll. Gate false matches on this, not on the decomposition.
+        misalignment_deg = float(np.degrees(np.arccos(
+            np.clip(float(np.dot(v_meas, v_exp)), -1.0, 1.0))))
+
         return json.dumps({
             "pitch_offset_deg": float(best_pitch_deg),
             "roll_offset_deg": float(best_roll_deg),
+            "misalignment_deg": misalignment_deg,
             "error": None
         })
 

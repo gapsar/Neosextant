@@ -108,6 +108,34 @@ for _ in range(4000):
     if found>=6: break
 print(f"B) calibrate->solve round trip: mean {np.mean(errsB):.4f} max {np.max(errsB):.4f} nmi  [expect <0.1]")
 
+# --- E: calibration offsets pick the real branch, misalignment is the true angle ---
+# B cannot see a wrong branch: the mirror solution (roll ~180 deg away) corrects
+# the vector exactly too, at that attitude. On the phone it was rejected by the
+# +/-5 deg gate instead, so ~1 good shot in 4 was lost. Landscape attitudes
+# (gravity along sensor x) are included on purpose.
+branch_bad=0; mis_err=[]; nE=0
+while nE<40:
+    Q,_=np.linalg.qr(rng.normal(size=(3,3)))
+    if np.linalg.det(Q)<0: Q[2]*=-1
+    v=Q@z_icrs; alt=np.degrees(np.arcsin(np.clip(v[0],-1,1)))
+    if not (15<alt<80): continue
+    ra,dec,roll=extract(Q)
+    g_true=np.array([-v[1],v[2],-v[0]])
+    tp,tr=rng.uniform(-1.5,1.5,2)
+    g_meas=applyOffsets(g_true,-tp,-tr)
+    c=json.loads(cn.solve_calibration_offsets(ra,dec,roll,*g_meas,tlat,tlon,stamp,1000.0,20.0))
+    if c.get("error"): continue
+    nE+=1
+    g_exp=np.array(json.loads(cn.solve_calibration_pair(ra,dec,roll,tlat,tlon,stamp,1000.0,20.0))["exp"])
+    g_fix=applyOffsets(g_meas,c["pitch_offset_deg"],c["roll_offset_deg"])
+    # The real offset is ~1.5 deg plus refraction; the mirror is >~45 deg.
+    if (abs(c["pitch_offset_deg"])>3 or abs(c["roll_offset_deg"])>3
+            or np.linalg.norm(g_fix/np.linalg.norm(g_fix)-g_exp)>1e-6): branch_bad+=1
+    true_ang=np.degrees(np.arccos(np.clip(g_meas@g_exp/np.linalg.norm(g_meas),-1,1)))
+    mis_err.append(abs(c["misalignment_deg"]-true_ang))
+print(f"E) calibration branch: {branch_bad}/{nE} mirror picks [expect 0]; "
+      f"misalignment error max {max(mis_err):.2e} deg [expect <1e-6]")
+
 # --- D: affine calibration at one set of attitudes, fixes at others ---
 # The sensor physically sees the APPARENT zenith: relative to the catalog
 # boresight tetra3 reports, it sits R(alt) closer to the boresight. Test B
@@ -149,5 +177,6 @@ u_good=cn._lsq_position_uncertainty([10.,130.,250.],[1.,-1.,.5])
 u_bad=cn._lsq_position_uncertainty([10.,20.,30.],[1.,-1.,.5])
 print(f"C) n=1 -> {r1} (expect nan), n=7 -> {r7:.2f} nmi")
 print(f"   geometry: spread azimuths {u_good:.2f} nmi vs clustered {u_bad:.2f} nmi  [bad must be larger]")
-ok = max(errsA)<0.01 and np.max(errsB)<0.1 and np.max(errsD)<0.05 and r1!=r1 and u_bad>u_good
+ok = (max(errsA)<0.01 and np.max(errsB)<0.1 and np.max(errsD)<0.05 and r1!=r1 and u_bad>u_good
+      and branch_bad==0 and max(mis_err)<1e-6)
 print(f"\n{'PASS' if ok else 'FAIL'}")

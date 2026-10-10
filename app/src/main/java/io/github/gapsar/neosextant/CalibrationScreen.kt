@@ -1,7 +1,6 @@
 package io.github.gapsar.neosextant
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
@@ -62,6 +61,7 @@ fun CalibrationScreen(
     onSaveOneshotCalibration: (Double, Double) -> Unit,
     currentOneshotPitchOffset: Double,
     currentOneshotRollOffset: Double,
+    session: NavigationViewModel.StarCalibrationSession,
     iso: Int = 3200,
     exposureTimeMs: Int = 250,
     supportsManualExposure: Boolean = true,
@@ -92,44 +92,60 @@ fun CalibrationScreen(
     val calibrationRollOffsets = remember { mutableStateListOf<Double>() }
 
     // ─── Star Calibration State ───
-    var latDeg by remember { mutableStateOf("") }
-    var latMin by remember { mutableStateOf("") }
-    var latDir by remember { mutableStateOf("N") }
-    var lonDeg by remember { mutableStateOf("") }
-    var lonMin by remember { mutableStateOf("") }
-    var lonDir by remember { mutableStateOf("E") }
+    // Held by the ViewModel so a long affine session survives leaving the screen.
+    var latDeg by session.latDeg
+    var latMin by session.latMin
+    var latDir by session.latDir
+    var lonDeg by session.lonDeg
+    var lonMin by session.lonMin
+    var lonDir by session.lonDir
     var statusMessage by remember { mutableStateOf("") }
     var isCalibrating by remember { mutableStateOf(false) }
 
     // Multi-sample 1-Shot calibration state
     val REQUIRED_ONESHOT_SAMPLES = 3
-    val oneshotPitchOffsets = remember { mutableStateListOf<Double>() }
-    val oneshotRollOffsets = remember { mutableStateListOf<Double>() }
+    val oneshotPitchOffsets = session.oneshotPitchOffsets
+    val oneshotRollOffsets = session.oneshotRollOffsets
+    var multiAttitude by session.multiAttitude
 
     // ─── Affine 1-Shot calibration state ───
     // Accumulates raw (measured, expected) gravity pairs across DIFFERENT
     // attitudes so a full 3×3 A + bias b can be fit. Unlike the averaged-offset
     // path above, this deliberately WANTS attitude spread, so it is not subject
     // to the deviate-from-mean rejection. Each JSON entry is
-    // {meas:[x,y,z], mag:Float, exp:[x,y,z]}.
+    // {meas:[x,y,z], mag:Float, exp:[x,y,z]}, the mean over one burst.
     //
-    // 24 shots is not arbitrary: A and b are 12 parameters, and simulation over
+    // 24 pairs is not arbitrary: A and b are 12 parameters, and simulation over
     // ~1400 sessions showed a 12-parameter fit reproduces 6 points almost
     // exactly no matter how wrong it is elsewhere. Attitude GROUPING is left to
     // Python, which clusters the measured directions — what the user believes
     // are distinct attitudes very often is not.
     val MIN_AFFINE_SAMPLES = 24
 
-    // Absolute pitch/roll offset beyond which a sample is treated as a probable
-    // false plate-solve match. Shared by the legacy accumulator and the affine
-    // pair collector: solve_calibration_offsets fits a 2-parameter rotation to
-    // align two unit vectors, which is 2 DOF onto 2 DOF, so it succeeds with a
-    // near-zero residual even for a completely wrong match — its internal error
-    // gate almost never fires. This absolute bound is the real false-match
-    // detector, so the affine path must apply it too.
+    // Each press takes a short burst and averages it into one sample. Single
+    // shots on a tripod scattered by up to ~1 deg in the star-solved attitude,
+    // which alone put the fit's held-out error over its 0.20 deg gate.
+    val CAL_BURST_COUNT = 5
+    val CAL_BURST_MIN_GOOD = 3
+    // Measured gravity moving more than this within one burst means the phone
+    // moved, and averaging would blend two attitudes.
+    val CAL_BURST_MAX_MOTION_DEG = 1.0
+
+    // False plate-solve match detector, shared by the legacy accumulator and
+    // the affine pair collector. It is the angle between measured and expected
+    // gravity, NOT the pitch/roll decomposition: in landscape the same 0.4 deg
+    // splits into ~6 deg of pitch and ~7 deg of roll, which a per-axis bound
+    // rejected, so the attitudes the affine fit needs most never reached it.
+    // Real misalignments measured on a Pixel 8a were 0.4-0.7 deg.
+    val MAX_MISALIGNMENT_DEG = 5.0
+    // The legacy path stores pitch/roll, so it still needs them to be small:
+    // they are only a usable correction near the attitude they were fitted at.
     val MAX_OFFSET_DEG = 5.0
-    val affinePairs = remember { mutableStateListOf<String>() }
-    var affineStatus by remember { mutableStateOf("") }
+    // A burst whose gravity is this far from the session's first one is a new
+    // attitude (same tolerance as the affine fit's attitude clustering).
+    val NEW_ATTITUDE_DEG = 15.0
+    val affinePairs = session.affinePairs
+    var affineStatus by session.affineStatus
 
     // Local state for displayed offsets — updates immediately on calibration success
     var displayedOneshotPitch by remember { mutableStateOf(currentOneshotPitchOffset) }
@@ -349,7 +365,8 @@ fun CalibrationScreen(
                     if (statusMessage.isNotEmpty()) {
                         Text(
                             text = statusMessage,
-                            color = if (statusMessage.contains(S.calibrationSuccess)) Color.Green else Color.Red,
+                            color = if (statusMessage.contains(S.calibrationSuccess) ||
+                                statusMessage.startsWith("Burst accepted")) Color.Green else Color.Red,
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
@@ -379,7 +396,7 @@ fun CalibrationScreen(
                     if (sensorCalibrator.hasValidAffine()) {
                         TextButton(onClick = {
                             sensorCalibrator.resetAffineCalibration()
-                            affinePairs.clear()
+                            session.reset()
                             affineStatus = "Affine calibration cleared — reverted to pitch/roll offset path."
                         }) {
                             Text("Reset affine calibration", color = Color.LightGray)
@@ -442,255 +459,223 @@ fun CalibrationScreen(
                                 isCalibrating = true
                                 statusMessage = calibratingProgressStr
 
-                                // Start sensor pitch/gyro averaging
-                                startPitchAveraging()
+                                val latVal = latD + (latM / 60.0)
+                                val latSigned = if (latDir == "S") -latVal else latVal
+                                val lonVal = lonD + (lonM / 60.0)
+                                val lonSigned = if (lonDir == "W") -lonVal else lonVal
+                                val pressureHpa = pressure.toDoubleOrNull() ?: 1013.25
+                                val temperatureC = temperature.toDoubleOrNull() ?: 15.0
+                                val burstId = System.currentTimeMillis()
+                                // Snapshot on the main thread: the fit runs on IO with this
+                                // burst's pair appended.
+                                val existingPairs = affinePairs.toList()
 
-                                captureCalibrationPhoto(context, imageCapture, onImageCaptured = { uri, path, shutterNs ->
-                                    // Anchor to the EXPOSURE, not to this callback: the JPEG encode and
-                                    // file write land here several hundred ms after the photons did, and
-                                    // the expected zenith rotates ~15 arcsec per second of delay.
-                                    val exposureWindow = shutterNs?.let { start ->
-                                        val durNs = if (supportsManualExposure)
-                                            exposureTimeMs * 1_000_000L else 0L
-                                        MainActivity.ExposureWindow(start, start + durNs)
-                                    }
-                                    val captureTime = exposureWindow?.let {
-                                        TimeSynchronizer.getTrueTimeAtElapsedNanos(it.midpointNs)
-                                    } ?: TimeSynchronizer.getTrueTime()
-                                    val avgGravity = stopPitchAveraging(exposureWindow)
-                                    // Raw (non-sphere-fit) gravity snapshot for the SAME shot, used only
-                                    // for the affine fit. Same window, so the two agree.
-                                    val rawSnap = snapshotRawGravity(exposureWindow)
-                                    if (avgGravity == null) {
-                                        isCalibrating = false
-                                        statusMessage = "Error: gravity vector not captured."
-                                        return@captureCalibrationPhoto
-                                    }
-
-                                    scope.launch(Dispatchers.IO) {
-                                        try {
-                                            val py = com.chaquo.python.Python.getInstance()
-                                            val pythonScript = py.getModule("celestial_navigator")
-                                            val imageName = File(path).name
-
-                                            val imageResultJsonStr = pythonScript.callAttr("image_processor", imageName, path).toString()
-                                            val imageResultJson = org.json.JSONObject(imageResultJsonStr)
-                                            val isSolved = imageResultJson.optInt("solved") == 1
-
-                                            // Delete photo file since we don't need to persist calibration photos
-                                            try { File(path).delete() } catch (e: Exception) {}
-
-                                            if (!isSolved) {
-                                                withContext(Dispatchers.Main) {
-                                                    isCalibrating = false
-                                                    statusMessage = "$calibrationFailedStr: Stars not recognized."
-                                                }
-                                                return@launch
+                                scope.launch {
+                                    try {
+                                        // ── 1. Capture the burst. Each shot gets its own gravity
+                                        // window and time, anchored to the camera's exposure start
+                                        // (takePhotoSuspend), the same as the 1-Shot burst.
+                                        val utcFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+                                        utcFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                                        val captures = mutableListOf<CalCapture>()
+                                        for (i in 0 until CAL_BURST_COUNT) {
+                                            statusMessage = "Capturing ${i + 1}/$CAL_BURST_COUNT…"
+                                            startPitchAveraging()
+                                            val capture = try {
+                                                takePhotoSuspend(context, imageCapture)
+                                            } catch (e: ImageCaptureException) {
+                                                stopPitchAveraging(null)
+                                                throw e
                                             }
+                                            val exposureWindow = capture.shutterElapsedNs?.let { start ->
+                                                val durNs = if (supportsManualExposure)
+                                                    exposureTimeMs * 1_000_000L else 0L
+                                                MainActivity.ExposureWindow(start, start + durNs)
+                                            }
+                                            val captureTime = exposureWindow?.let {
+                                                TimeSynchronizer.getTrueTimeAtElapsedNanos(it.midpointNs)
+                                            } ?: TimeSynchronizer.getTrueTime()
+                                            val gravity = stopPitchAveraging(exposureWindow)
+                                            // Raw (non-sphere-fit) gravity for the SAME window, used
+                                            // only by the affine fit.
+                                            val rawSnap = snapshotRawGravity(exposureWindow)
+                                            if (gravity == null) {
+                                                File(capture.path).delete()
+                                                continue
+                                            }
+                                            captures.add(CalCapture(capture.path,
+                                                utcFormat.format(captureTime), gravity, rawSnap))
+                                        }
 
-                                            val ra = imageResultJson.optDouble("ra_deg")
-                                            val dec = imageResultJson.optDouble("dec_deg")
-                                            val roll = imageResultJson.optDouble("roll_deg")
+                                        // ── 2. Solve every shot, then average the good ones into
+                                        // one sample (and fit, once there are enough).
+                                        statusMessage = "Solving ${captures.size} shots…"
+                                        val burst = withContext(Dispatchers.IO) {
+                                            val solved = solveCalibrationShots(
+                                                context, captures, latSigned, lonSigned,
+                                                pressureHpa, temperatureC, MAX_MISALIGNMENT_DEG,
+                                                session.sessionId, burstId)
+                                            val result = combineCalibrationBurst(solved)
+                                            var fitJson: String? = null
+                                            val pair = result?.pairJson
+                                            if (result != null && pair != null &&
+                                                solved.size >= CAL_BURST_MIN_GOOD &&
+                                                result.motionDeg <= CAL_BURST_MAX_MOTION_DEG &&
+                                                existingPairs.size + 1 >= MIN_AFFINE_SAMPLES) {
+                                                val allPairs = org.json.JSONArray()
+                                                existingPairs.forEach { allPairs.put(org.json.JSONObject(it)) }
+                                                allPairs.put(pair)
+                                                fitJson = com.chaquo.python.Python.getInstance()
+                                                    .getModule("celestial_navigator")
+                                                    .callAttr("fit_affine_calibration", allPairs.toString())
+                                                    .toString()
+                                            }
+                                            Triple(solved, result, fitJson)
+                                        }
+                                        val (solved, result, fitJson) = burst
 
-                                            val latVal = latD + (latM / 60.0)
-                                            val latSigned = if (latDir == "S") -latVal else latVal
-                                            val lonVal = lonD + (lonM / 60.0)
-                                            val lonSigned = if (lonDir == "W") -lonVal else lonVal
+                                        // ── 3. Apply, on the main thread.
+                                        if (result == null || solved.size < CAL_BURST_MIN_GOOD) {
+                                            statusMessage = "$calibrationFailedStr: only ${solved.size} of " +
+                                                "$CAL_BURST_COUNT shots were usable (star match and gravity " +
+                                                "check). Retake."
+                                            return@launch
+                                        }
+                                        if (result.motionDeg > CAL_BURST_MAX_MOTION_DEG) {
+                                            statusMessage = "$calibrationFailedStr: the phone moved during the " +
+                                                "burst (%.1f°). Keep it still and retake.".format(result.motionDeg)
+                                            return@launch
+                                        }
 
-                                            // C-03: Format as ISO 8601 UTC string for Python/Astropy
-                                            val utcFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
-                                            utcFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                                            val captureTimeIso = utcFormat.format(captureTime)
+                                        // A clearly different attitude turns this into an affine-only
+                                        // session (see StarCalibrationSession.multiAttitude).
+                                        val first = session.firstGravity
+                                        if (first == null) {
+                                            session.firstGravity = result.gravity
+                                        } else if (!multiAttitude &&
+                                            angleDeg(first, result.gravity) > NEW_ATTITUDE_DEG) {
+                                            multiAttitude = true
+                                            oneshotPitchOffsets.clear()
+                                            oneshotRollOffsets.clear()
+                                        }
 
-                                            val calResultJsonStr = pythonScript.callAttr(
-                                                "solve_calibration_offsets",
-                                                ra, dec, roll,
-                                                avgGravity.x, avgGravity.y, avgGravity.z,
-                                                latSigned, lonSigned,
-                                                captureTimeIso,
-                                                pressure.toDoubleOrNull() ?: 1013.25,
-                                                temperature.toDoubleOrNull() ?: 15.0
-                                            ).toString()
-
-                                            val calResultJson = org.json.JSONObject(calResultJsonStr)
-                                            val err = calResultJson.optString("error").takeIf { it.isNotEmpty() && it != "null" }
-
-                                            // ─── Affine pair collection (additive; never blocks legacy path) ───
-                                            // Compute the expected gravity direction for this shot and pair it
-                                            // with the raw measured direction+magnitude. Attitude grouping is
-                                            // derived from the data in Python, not tagged here.
-                                            //
-                                            // The affine collector deliberately skips the deviation-from-mean
-                                            // filter below — that would reject exactly the attitude spread the
-                                            // fit needs — but it must NOT skip the absolute-offset bound, which
-                                            // is a false-match detector rather than a spread filter. One false
-                                            // match contributes a pair whose expected direction is essentially
-                                            // random, which either skews the fit or (more likely) inflates the
-                                            // held-out error enough to reject an otherwise good session.
-                                            val calPitchOffset = calResultJson.optDouble("pitch_offset_deg", Double.NaN)
-                                            val calRollOffset = calResultJson.optDouble("roll_offset_deg", Double.NaN)
-                                            val offsetsPlausible = !calPitchOffset.isNaN() && !calRollOffset.isNaN() &&
-                                                abs(calPitchOffset) <= MAX_OFFSET_DEG &&
-                                                abs(calRollOffset) <= MAX_OFFSET_DEG
-
-                                            var affinePairJson: String? = null
-                                            var affineFitJson: String? = null
-                                            if (err == null && rawSnap != null && offsetsPlausible) {
+                                        // ── Affine collection (independent of the legacy filters
+                                        // below, so attitude spread is preserved). ──
+                                        val pairJson = result.pairJson
+                                        if (pairJson != null) {
+                                            affinePairs.add(pairJson.toString())
+                                            if (fitJson != null) {
                                                 try {
-                                                    val pairStr = pythonScript.callAttr(
-                                                        "solve_calibration_pair",
-                                                        ra, dec, roll,
-                                                        latSigned, lonSigned,
-                                                        captureTimeIso,
-                                                        // Same refraction inputs as the 1-Shot solve,
-                                                        // which adds back what this removes.
-                                                        pressure.toDoubleOrNull() ?: 1013.25,
-                                                        temperature.toDoubleOrNull() ?: 15.0
-                                                    ).toString()
-                                                    val pairJson = org.json.JSONObject(pairStr)
-                                                    val pairErr = pairJson.optString("error")
+                                                    val fit = org.json.JSONObject(fitJson)
+                                                    val fitErr = fit.optString("error")
                                                         .takeIf { it.isNotEmpty() && it != "null" }
-                                                    if (pairErr == null) {
-                                                        val expArr = pairJson.getJSONArray("exp")
-                                                        val obj = org.json.JSONObject()
-                                                        obj.put("meas", org.json.JSONArray(listOf(
-                                                            rawSnap.direction.x, rawSnap.direction.y, rawSnap.direction.z
-                                                        )))
-                                                        obj.put("mag", rawSnap.magnitude)
-                                                        obj.put("exp", expArr)
-                                                        affinePairJson = obj.toString()
-
-                                                        // Once we have enough attitudes, attempt the fit here on
-                                                        // the IO thread (numpy work off the main thread).
-                                                        if (affinePairs.size + 1 >= MIN_AFFINE_SAMPLES) {
-                                                            val allPairs = org.json.JSONArray()
-                                                            affinePairs.forEach { allPairs.put(org.json.JSONObject(it)) }
-                                                            allPairs.put(obj)
-                                                            affineFitJson = pythonScript.callAttr(
-                                                                "fit_affine_calibration", allPairs.toString()
-                                                            ).toString()
-                                                        }
+                                                    if (fitErr == null && fit.optBoolean("healthy", false)) {
+                                                        val aArr = fit.getJSONArray("A")
+                                                        val bArr = fit.getJSONArray("b")
+                                                        val a = FloatArray(9) { i -> aArr.getDouble(i).toFloat() }
+                                                        val b = SensorCalibrator.Vec3(
+                                                            bArr.getDouble(0).toFloat(),
+                                                            bArr.getDouble(1).toFloat(),
+                                                            bArr.getDouble(2).toFloat()
+                                                        )
+                                                        sensorCalibrator.saveAffineParams(
+                                                            SensorCalibrator.AffineParams(a, b, true)
+                                                        )
+                                                        // Held-out (leave-one-attitude-out) error is the only
+                                                        // number here that means anything; in-sample is ~0.05°
+                                                        // even for a fit that is degrees wrong, so it is not shown.
+                                                        affineStatus = ("Affine cal ✓ — held-out %.2f° (≈%.0f nmi), " +
+                                                            "%d samples / %d attitudes, spread %.0f°").format(
+                                                            fit.optDouble("loco_rms_deg", Double.NaN),
+                                                            fit.optDouble("loco_rms_deg", 0.0) * 60.0,
+                                                            fit.optInt("n_pairs", affinePairs.size),
+                                                            fit.optInt("n_clusters", 0),
+                                                            fit.optDouble("attitude_spread_deg", 0.0)
+                                                        )
+                                                    } else {
+                                                        val reasons = fit.optJSONArray("reject_reasons")
+                                                        val why = if (reasons != null && reasons.length() > 0) {
+                                                            (0 until reasons.length())
+                                                                .joinToString("; ") { reasons.optString(it) }
+                                                        } else "not yet reliable"
+                                                        affineStatus = ("Affine not adopted: %s. %d samples / %d attitudes, " +
+                                                            "spread %.0f° — tilt the phone to clearly different " +
+                                                            "angles between bursts.").format(
+                                                            why,
+                                                            fit.optInt("n_pairs", affinePairs.size),
+                                                            fit.optInt("n_clusters", 0),
+                                                            fit.optDouble("attitude_spread_deg", 0.0)
+                                                        )
                                                     }
                                                 } catch (e: Exception) {
-                                                    Log.w("CalibrationScreen", "Affine pair collection failed (non-fatal)", e)
+                                                    Log.w("CalibrationScreen", "Affine fit parse failed (non-fatal)", e)
                                                 }
-                                            }
-
-                                            withContext(Dispatchers.Main) {
-                                                isCalibrating = false
-                                                if (err != null) {
-                                                    statusMessage = "$calibrationFailedStr: $err"
-                                                } else {
-                                                    // ── Affine collection (independent of the legacy deviation
-                                                    // filter below, so attitude spread is preserved). ──
-                                                    if (affinePairJson != null) {
-                                                        affinePairs.add(affinePairJson)
-                                                        if (affineFitJson != null) {
-                                                            try {
-                                                                val fit = org.json.JSONObject(affineFitJson)
-                                                                val fitErr = fit.optString("error")
-                                                                    .takeIf { it.isNotEmpty() && it != "null" }
-                                                                if (fitErr == null && fit.optBoolean("healthy", false)) {
-                                                                    val aArr = fit.getJSONArray("A")
-                                                                    val bArr = fit.getJSONArray("b")
-                                                                    val a = FloatArray(9) { i -> aArr.getDouble(i).toFloat() }
-                                                                    val b = SensorCalibrator.Vec3(
-                                                                        bArr.getDouble(0).toFloat(),
-                                                                        bArr.getDouble(1).toFloat(),
-                                                                        bArr.getDouble(2).toFloat()
-                                                                    )
-                                                                    sensorCalibrator.saveAffineParams(
-                                                                        SensorCalibrator.AffineParams(a, b, true)
-                                                                    )
-                                                                    // Held-out (leave-one-attitude-out) error is the only
-                                                                    // number here that means anything; in-sample is ~0.05°
-                                                                    // even for a fit that is degrees wrong, so it is not shown.
-                                                                    affineStatus = ("Affine cal ✓ — held-out %.2f° (≈%.0f nmi), " +
-                                                                        "%d shots / %d attitudes, spread %.0f°").format(
-                                                                        fit.optDouble("loco_rms_deg", Double.NaN),
-                                                                        fit.optDouble("loco_rms_deg", 0.0) * 60.0,
-                                                                        fit.optInt("n_pairs", affinePairs.size),
-                                                                        fit.optInt("n_clusters", 0),
-                                                                        fit.optDouble("attitude_spread_deg", 0.0)
-                                                                    )
-                                                                } else {
-                                                                    val reasons = fit.optJSONArray("reject_reasons")
-                                                                    val why = if (reasons != null && reasons.length() > 0) {
-                                                                        (0 until reasons.length())
-                                                                            .joinToString("; ") { reasons.optString(it) }
-                                                                    } else "not yet reliable"
-                                                                    affineStatus = ("Affine not adopted: %s. %d shots / %d attitudes, " +
-                                                                        "spread %.0f° — tilt the phone to clearly different " +
-                                                                        "angles between shots.").format(
-                                                                        why,
-                                                                        fit.optInt("n_pairs", affinePairs.size),
-                                                                        fit.optInt("n_clusters", 0),
-                                                                        fit.optDouble("attitude_spread_deg", 0.0)
-                                                                    )
-                                                                }
-                                                            } catch (e: Exception) {
-                                                                Log.w("CalibrationScreen", "Affine fit parse failed (non-fatal)", e)
-                                                            }
-                                                        } else {
-                                                            affineStatus = "Affine: ${affinePairs.size}/$MIN_AFFINE_SAMPLES shots — " +
-                                                                "aim for ~6-8 clearly different phone tilts, 3-4 shots each"
-                                                        }
-                                                    }
-
-                                                    val pitchOffset = calResultJson.getDouble("pitch_offset_deg")
-                                                    val rollOffset = calResultJson.getDouble("roll_offset_deg")
-
-                                                    // Reject outliers: absolute offset > 5° on either axis
-                                                    if (abs(pitchOffset) > MAX_OFFSET_DEG || abs(rollOffset) > MAX_OFFSET_DEG) {
-                                                        statusMessage = "Sample rejected: offset too large (P: %.2f° R: %.2f°, max ±%.0f°). Retake.".format(pitchOffset, rollOffset, MAX_OFFSET_DEG)
-                                                        Log.w("CalibrationScreen", "Rejected 1-Shot sample: pitch=$pitchOffset, roll=$rollOffset (exceeds ±$MAX_OFFSET_DEG°)")
-                                                        return@withContext
-                                                    }
-
-                                                    // Reject if deviation from running mean > 5° (likely false match)
-                                                    if (oneshotPitchOffsets.isNotEmpty()) {
-                                                        val runningPitchMean = oneshotPitchOffsets.average()
-                                                        val runningRollMean = oneshotRollOffsets.average()
-                                                        if (abs(pitchOffset - runningPitchMean) > MAX_OFFSET_DEG || abs(rollOffset - runningRollMean) > MAX_OFFSET_DEG) {
-                                                            statusMessage = "Sample rejected: deviates too much from previous samples. Retake."
-                                                            Log.w("CalibrationScreen", "Rejected 1-Shot sample: deviation from mean too large")
-                                                            return@withContext
-                                                        }
-                                                    }
-
-                                                    // Accumulate this sample
-                                                    oneshotPitchOffsets.add(pitchOffset)
-                                                    oneshotRollOffsets.add(rollOffset)
-
-                                                    if (oneshotPitchOffsets.size >= REQUIRED_ONESHOT_SAMPLES) {
-                                                        // All samples collected — save the averaged offsets
-                                                        val avgPitch = oneshotPitchOffsets.average()
-                                                        val avgRoll = oneshotRollOffsets.average()
-                                                        Log.d("CalibrationScreen", "Multi-sample 1-Shot calibration complete. Pitch avg: $avgPitch, Roll avg: $avgRoll")
-                                                        onSaveOneshotCalibration(avgPitch, avgRoll)
-                                                        displayedOneshotPitch = avgPitch
-                                                        displayedOneshotRoll = avgRoll
-                                                        statusMessage = calibrationSuccessStr
-                                                        oneshotPitchOffsets.clear()
-                                                        oneshotRollOffsets.clear()
-                                                    } else {
-                                                        statusMessage = "Sample ${oneshotPitchOffsets.size}/$REQUIRED_ONESHOT_SAMPLES captured. Take another photo."
-                                                    }
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                            Log.e("CalibrationScreen", "Calibration failed", e)
-                                            withContext(Dispatchers.Main) {
-                                                isCalibrating = false
-                                                statusMessage = "$calibrationFailedStr: ${e.message}"
+                                            } else {
+                                                affineStatus = "Affine: ${affinePairs.size}/$MIN_AFFINE_SAMPLES samples — " +
+                                                    "aim for ~8 clearly different phone tilts (portrait and " +
+                                                    "landscape), 3 bursts each"
                                             }
                                         }
+
+                                        if (multiAttitude) {
+                                            statusMessage = "Burst accepted (%d/%d shots, %.2f° off). This session covers " +
+                                                "several attitudes, so it only feeds the affine fit; the 1-Shot " +
+                                                "offsets are kept.".format(solved.size, CAL_BURST_COUNT,
+                                                    result.misalignmentDeg)
+                                            return@launch
+                                        }
+
+                                        val pitchOffset = result.pitchOffsetDeg
+                                        val rollOffset = result.rollOffsetDeg
+
+                                        // Pitch/roll are only a usable correction when both are small;
+                                        // in landscape they blow up even for a sub-degree misalignment.
+                                        if (abs(pitchOffset) > MAX_OFFSET_DEG || abs(rollOffset) > MAX_OFFSET_DEG) {
+                                            statusMessage = "Sample not usable for the 1-Shot offsets at this attitude " +
+                                                "(P: %.2f° R: %.2f°, max ±%.0f°); hold the phone upright.".format(
+                                                    pitchOffset, rollOffset, MAX_OFFSET_DEG)
+                                            Log.w("CalibrationScreen", "Legacy sample skipped: pitch=$pitchOffset, roll=$rollOffset")
+                                            return@launch
+                                        }
+
+                                        // Reject if deviation from running mean > 5° (likely false match)
+                                        if (oneshotPitchOffsets.isNotEmpty()) {
+                                            val runningPitchMean = oneshotPitchOffsets.average()
+                                            val runningRollMean = oneshotRollOffsets.average()
+                                            if (abs(pitchOffset - runningPitchMean) > MAX_OFFSET_DEG || abs(rollOffset - runningRollMean) > MAX_OFFSET_DEG) {
+                                                statusMessage = "Sample rejected: deviates too much from previous samples. Retake."
+                                                Log.w("CalibrationScreen", "Rejected 1-Shot sample: deviation from mean too large")
+                                                return@launch
+                                            }
+                                        }
+
+                                        // Accumulate this sample
+                                        oneshotPitchOffsets.add(pitchOffset)
+                                        oneshotRollOffsets.add(rollOffset)
+
+                                        if (oneshotPitchOffsets.size >= REQUIRED_ONESHOT_SAMPLES) {
+                                            // All samples collected — save the averaged offsets
+                                            val avgPitch = oneshotPitchOffsets.average()
+                                            val avgRoll = oneshotRollOffsets.average()
+                                            Log.d("CalibrationScreen", "Multi-sample 1-Shot calibration complete. Pitch avg: $avgPitch, Roll avg: $avgRoll")
+                                            onSaveOneshotCalibration(avgPitch, avgRoll)
+                                            displayedOneshotPitch = avgPitch
+                                            displayedOneshotRoll = avgRoll
+                                            statusMessage = calibrationSuccessStr
+                                            oneshotPitchOffsets.clear()
+                                            oneshotRollOffsets.clear()
+                                        } else {
+                                            statusMessage = "Sample ${oneshotPitchOffsets.size}/$REQUIRED_ONESHOT_SAMPLES captured. Take another photo."
+                                        }
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        Log.e("CalibrationScreen", "Calibration failed", e)
+                                        statusMessage = "$calibrationFailedStr: ${e.message}"
+                                    } finally {
+                                        isCalibrating = false
                                     }
-                                }, onError = { exc ->
-                                    stopPitchAveraging(null)
-                                    isCalibrating = false
-                                    statusMessage = "$calibrationFailedStr: ${exc.message}"
-                                })
+                                }
                             },
                             enabled = !isCalibrating,
                             modifier = Modifier.weight(1f),
@@ -699,7 +684,9 @@ fun CalibrationScreen(
                             if (isCalibrating) {
                                 CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                             } else {
-                                val label = if (oneshotPitchOffsets.isEmpty()) {
+                                val label = if (multiAttitude) {
+                                    "${S.calibrate} (${affinePairs.size}/$MIN_AFFINE_SAMPLES)"
+                                } else if (oneshotPitchOffsets.isEmpty()) {
                                     S.calibrate
                                 } else {
                                     "${S.calibrate} (${oneshotPitchOffsets.size + 1}/$REQUIRED_ONESHOT_SAMPLES)"
@@ -709,14 +696,12 @@ fun CalibrationScreen(
                         }
                     }
 
-                    // Reset button — visible when at least one sample is recorded
-                    if (oneshotPitchOffsets.isNotEmpty()) {
+                    // Reset button — visible when the session holds anything
+                    if (oneshotPitchOffsets.isNotEmpty() || affinePairs.isNotEmpty() ||
+                        session.firstGravity != null) {
                         TextButton(
                             onClick = {
-                                oneshotPitchOffsets.clear()
-                                oneshotRollOffsets.clear()
-                                affinePairs.clear()
-                                affineStatus = ""
+                                session.reset()
                                 statusMessage = ""
                             }
                         ) {
@@ -859,43 +844,199 @@ fun CalibrationScreen(
     }
 }
 
-private fun captureCalibrationPhoto(
+/** One captured shot of a calibration burst, before plate solving. */
+private class CalCapture(
+    val path: String,
+    val captureTimeIso: String,
+    /** Calibrated (sphere-fit) gravity over the exposure. */
+    val gravity: SensorCalibrator.Vec3,
+    /** Raw gravity over the same window; null if the snapshot failed. */
+    val raw: MainActivity.RawGravitySnapshot?
+)
+
+/** One shot that matched the stars and passed the misalignment gate. */
+private class CalSolved(
+    val capture: CalCapture,
+    val pitchOffsetDeg: Double,
+    val rollOffsetDeg: Double,
+    val misalignmentDeg: Double,
+    /** Expected gravity direction in the sensor frame (unit). */
+    val exp: DoubleArray
+)
+
+/** A burst reduced to one calibration sample. */
+private class CalBurstResult(
+    val pitchOffsetDeg: Double,
+    val rollOffsetDeg: Double,
+    val misalignmentDeg: Double,
+    /** Mean calibrated gravity direction (unit). */
+    val gravity: SensorCalibrator.Vec3,
+    /** Largest angle between a shot's measured gravity and the burst mean. */
+    val motionDeg: Double,
+    /** Mean affine pair {meas, mag, exp}; null if a raw snapshot was missing. */
+    val pairJson: org.json.JSONObject?
+)
+
+/** Every calibration shot, one JSON object per line, so a session can be refitted offline. */
+private const val CALIBRATION_LOG_FILE = "calibration_shots.jsonl"
+
+private fun appendCalibrationLog(context: Context, line: org.json.JSONObject) {
+    try {
+        File(context.filesDir, CALIBRATION_LOG_FILE).appendText(line.toString() + "\n")
+    } catch (e: Exception) {
+        Log.w("CalibrationScreen", "Could not write the calibration log", e)
+    }
+}
+
+private fun vecJson(x: Double, y: Double, z: Double) = org.json.JSONArray(listOf(x, y, z))
+
+/**
+ * Plate-solves each shot, computes its pitch/roll offsets, misalignment and
+ * expected gravity, and deletes the photo. Logs every shot, kept or not.
+ * Returns the shots that matched and whose measured gravity is within
+ * [maxMisalignmentDeg] of the expected one. Runs Python, so call it off the
+ * main thread.
+ */
+private fun solveCalibrationShots(
     context: Context,
-    imageCapture: ImageCapture,
-    onImageCaptured: (Uri, String, Long?) -> Unit,
-    onError: (ImageCaptureException) -> Unit
-) {
-    val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
-        .format(System.currentTimeMillis()) + ".jpg"
-    val photoFile = File(
-        context.getExternalFilesDir(null),
-        name
-    )
-
-    val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
-
-    // Both callbacks are delivered on the main executor, so no synchronisation needed.
-    var shutterNs: Long? = null
-
-    imageCapture.takePicture(
-        outputOptions,
-        ContextCompat.getMainExecutor(context),
-        object : ImageCapture.OnImageSavedCallback {
-            // Shutter open, not file written — see CaptureResult in CameraView.
-            override fun onCaptureStarted() {
-                shutterNs = android.os.SystemClock.elapsedRealtimeNanos()
+    captures: List<CalCapture>,
+    latDeg: Double,
+    lonDeg: Double,
+    pressureHpa: Double,
+    temperatureC: Double,
+    maxMisalignmentDeg: Double,
+    sessionId: Long,
+    burstId: Long
+): List<CalSolved> {
+    val py = com.chaquo.python.Python.getInstance().getModule("celestial_navigator")
+    val solved = mutableListOf<CalSolved>()
+    for (c in captures) {
+        val log = org.json.JSONObject()
+            .put("session", sessionId).put("burst", burstId)
+            .put("time", c.captureTimeIso).put("lat", latDeg).put("lon", lonDeg)
+            .put("pressure_hpa", pressureHpa).put("temperature_c", temperatureC)
+            .put("cal_g", vecJson(c.gravity.x.toDouble(), c.gravity.y.toDouble(), c.gravity.z.toDouble()))
+        c.raw?.let {
+            log.put("raw_dir", vecJson(it.direction.x.toDouble(), it.direction.y.toDouble(), it.direction.z.toDouble()))
+                .put("raw_mag", it.magnitude)
+        }
+        try {
+            val image = org.json.JSONObject(
+                py.callAttr("image_processor", File(c.path).name, c.path).toString())
+            if (image.optInt("solved") != 1) {
+                log.put("solved", false)
+                continue
             }
+            val ra = image.optDouble("ra_deg")
+            val dec = image.optDouble("dec_deg")
+            val roll = image.optDouble("roll_deg")
+            log.put("solved", true).put("ra", ra).put("dec", dec).put("roll", roll)
 
-            override fun onError(exc: ImageCaptureException) {
-                Log.e("CalibrationScreen", "Photo capture failed: ${exc.message}", exc)
-                onError(exc)
+            val cal = org.json.JSONObject(py.callAttr(
+                "solve_calibration_offsets", ra, dec, roll,
+                c.gravity.x, c.gravity.y, c.gravity.z,
+                latDeg, lonDeg, c.captureTimeIso, pressureHpa, temperatureC).toString())
+            val err = cal.optString("error").takeIf { it.isNotEmpty() && it != "null" }
+            if (err != null) {
+                log.put("error", err)
+                continue
             }
+            val misalignment = cal.optDouble("misalignment_deg", Double.NaN)
+            log.put("pitch_offset", cal.optDouble("pitch_offset_deg"))
+                .put("roll_offset", cal.optDouble("roll_offset_deg"))
+                .put("misalignment_deg", misalignment)
 
-            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                val savedUri = Uri.fromFile(photoFile)
-                onImageCaptured(savedUri, photoFile.absolutePath, shutterNs)
+            val pair = org.json.JSONObject(py.callAttr(
+                "solve_calibration_pair", ra, dec, roll,
+                latDeg, lonDeg, c.captureTimeIso, pressureHpa, temperatureC).toString())
+            val pairErr = pair.optString("error").takeIf { it.isNotEmpty() && it != "null" }
+            if (pairErr != null) {
+                log.put("error", pairErr)
+                continue
             }
+            val expArr = pair.getJSONArray("exp")
+            log.put("exp", expArr)
+
+            // A false plate-solve match gives an essentially random expected
+            // direction, far from what the accelerometer reads.
+            val kept = !misalignment.isNaN() && misalignment <= maxMisalignmentDeg
+            log.put("kept", kept)
+            if (kept) {
+                solved.add(CalSolved(
+                    c,
+                    cal.getDouble("pitch_offset_deg"),
+                    cal.getDouble("roll_offset_deg"),
+                    misalignment,
+                    DoubleArray(3) { expArr.getDouble(it) }
+                ))
+            }
+        } catch (e: Exception) {
+            Log.w("CalibrationScreen", "Calibration shot failed: ${c.path}", e)
+            log.put("error", e.message ?: e.toString())
+        } finally {
+            try { File(c.path).delete() } catch (e: Exception) {}
+            appendCalibrationLog(context, log)
+            Log.d("CalibrationScreen", "Calibration shot: $log")
+        }
+    }
+    return solved
+}
+
+private fun unitMean(vectors: List<DoubleArray>): DoubleArray {
+    val m = DoubleArray(3)
+    for (v in vectors) for (i in 0..2) m[i] += v[i]
+    val n = sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
+    return DoubleArray(3) { m[it] / n }
+}
+
+private fun unit(v: SensorCalibrator.Vec3): DoubleArray {
+    val n = sqrt((v.x * v.x + v.y * v.y + v.z * v.z).toDouble())
+    return doubleArrayOf(v.x / n, v.y / n, v.z / n)
+}
+
+private fun angleDeg(a: DoubleArray, b: DoubleArray): Double =
+    Math.toDegrees(Math.acos((a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).coerceIn(-1.0, 1.0)))
+
+private fun angleDeg(a: SensorCalibrator.Vec3, b: SensorCalibrator.Vec3): Double =
+    angleDeg(unit(a), unit(b))
+
+private fun median(values: List<Double>): Double {
+    val s = values.sorted()
+    val n = s.size
+    return if (n % 2 == 1) s[n / 2] else (s[n / 2 - 1] + s[n / 2]) / 2.0
+}
+
+/**
+ * Reduces a burst to one sample: mean directions for the affine pair (the
+ * phone is still, so every shot sees the same two vectors plus noise), and the
+ * median pitch/roll for the legacy path. Null if no shot survived.
+ */
+private fun combineCalibrationBurst(solved: List<CalSolved>): CalBurstResult? {
+    if (solved.isEmpty()) return null
+    val gravities = solved.map { unit(it.capture.gravity) }
+    val gMean = unitMean(gravities)
+    val motion = gravities.maxOf { angleDeg(it, gMean) }
+
+    val raws = solved.mapNotNull { it.capture.raw }
+    val pairJson = if (raws.size == solved.size) {
+        val meas = unitMean(raws.map {
+            doubleArrayOf(it.direction.x.toDouble(), it.direction.y.toDouble(), it.direction.z.toDouble())
         })
+        val exp = unitMean(solved.map { it.exp })
+        org.json.JSONObject()
+            .put("meas", vecJson(meas[0], meas[1], meas[2]))
+            .put("mag", raws.map { it.magnitude }.average())
+            .put("exp", vecJson(exp[0], exp[1], exp[2]))
+    } else null
+
+    return CalBurstResult(
+        pitchOffsetDeg = median(solved.map { it.pitchOffsetDeg }),
+        rollOffsetDeg = median(solved.map { it.rollOffsetDeg }),
+        misalignmentDeg = median(solved.map { it.misalignmentDeg }),
+        gravity = SensorCalibrator.Vec3(gMean[0].toFloat(), gMean[1].toFloat(), gMean[2].toFloat()),
+        motionDeg = motion,
+        pairJson = pairJson
+    )
 }
 
 @Composable
