@@ -144,6 +144,37 @@ fun AppNavigator(
         }
         
         Box(modifier = rootModifier) {
+            // Outside the NavHost so a fix is computed whichever screen is open.
+            FixSolveTrigger(
+                navController = navController,
+                historyRepository = historyRepository,
+                capturedImages = capturedImages,
+                solverMode = solverMode,
+                latitude = latitude,
+                longitude = longitude,
+                altitude = altitude,
+                temperature = temperature,
+                pressure = pressure,
+                navigatedToMap = navigatedToMap,
+                onNavigatedToMapChange = { navigatedToMap = it },
+                onComputedLatitudeChange = { computedLatitude = it },
+                onComputedLongitudeChange = { computedLongitude = it },
+                onComputedPrecisionChange = { computedPrecision = it },
+                lastSolvedCount = lastSolvedCount,
+                onLastSolvedCountChange = { lastSolvedCount = it },
+                onIndividualFixesChange = {
+                    vm.individualFixes.clear()
+                    vm.individualFixes.addAll(it)
+                },
+                onUpdateImage = { updatedImage ->
+                    val index = capturedImages.indexOfFirst { it.id == updatedImage.id }
+                    if (index != -1) {
+                        capturedImages[index] = updatedImage
+                    }
+                },
+                processingScope = vm.viewModelScope,
+                fixSolve = vm.fixSolve
+            )
             NavHost(navController = navController, startDestination = startDest) {
             composable("languageSelection") {
                 LanguageSelectionScreen(
@@ -179,7 +210,6 @@ fun AppNavigator(
 
             CameraView(
                 navController = navController,
-                historyRepository = historyRepository,
                 latitude = latitude,
                 longitude = longitude,
                 altitude = altitude,
@@ -230,20 +260,12 @@ fun AppNavigator(
                     viewerImageInfo = image
                     navController.navigate("imageViewer")
                 },
-                navigatedToMap = navigatedToMap,
                 onNavigatedToMapChange = { navigatedToMap = it },
                 computedLatitude = computedLatitude,
                 onComputedLatitudeChange = { computedLatitude = it },
                 computedLongitude = computedLongitude,
                 onComputedLongitudeChange = { computedLongitude = it },
                 computedPrecision = computedPrecision,
-                onComputedPrecisionChange = { computedPrecision = it },
-                lastSolvedCount = lastSolvedCount,
-                onLastSolvedCountChange = { lastSolvedCount = it },
-                onIndividualFixesChange = {
-                    vm.individualFixes.clear()
-                    vm.individualFixes.addAll(it)
-                },
                 supportsManualExposure = supportsManualExposure,
                 startPitchAveraging = startPitchAveraging,
                 stopPitchAveraging = stopPitchAveraging,
