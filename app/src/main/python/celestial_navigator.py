@@ -1375,8 +1375,13 @@ def solve_oneshot_burst_multi(burst_groups_json, pressure_hpa=1013.25,
             intra = [v for v in intra if v == v]
             if intra:
                 repeatability = float(max(intra))
-                basis = "single burst of %d fixes" % max(
-                    d.get("valid_fixes", 0) for d in burst_details)
+                if len(intra) == 1:
+                    basis = "single burst of %d fixes" % max(
+                        d.get("valid_fixes", 0) for d in burst_details)
+                else:
+                    # Two slots: no inter-slot spread to measure yet, so report
+                    # the worse of the two bursts' own spreads.
+                    basis = "worst of %d bursts" % len(intra)
 
         print(f"Python: Burst-multi FINAL from {len(slot_lats)} slots: "
               f"Lat={final_lat:.4f}, Lon={final_lon:.4f}, "
