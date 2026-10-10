@@ -47,14 +47,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
-import kotlin.math.asin
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.pow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,8 +69,12 @@ fun MapScreen(
 
     val estimatedGeoPoint = GeoPoint(estimatedLatitude.toDoubleOrNull() ?: 0.0, estimatedLongitude.toDoubleOrNull() ?: 0.0)
     val computedGeoPoint = GeoPoint(computedLatitude, computedLongitude)
-
-    val distance = calculateDistanceInNauticalMiles(estimatedGeoPoint, computedGeoPoint)
+    // The estimated position is only the assumed position the LOPs are drawn
+    // from. A 1-Shot fix has none, and the stored estimate is then usually the
+    // 0/0 default, which used to centre the map in the ocean halfway there.
+    val hasLops = capturedImages.any { it.lopData != null }
+    // The points the map was last framed on (plain holder: changing it must not recompose).
+    val framedFor = remember { object { var value: Any? = null } }
 
     val mapView = remember { MapView(context) }
 
@@ -163,26 +164,36 @@ fun MapScreen(
                         update = { view ->
                             view.overlays.clear() // H-14: Clear stale overlays before adding new ones
 
-                            // Center the map between estimated and computed positions
-                            val centerLat = (estimatedGeoPoint.latitude + computedGeoPoint.latitude) / 2.0
-                            val centerLon = (estimatedGeoPoint.longitude + computedGeoPoint.longitude) / 2.0
-                            view.controller.setZoom(12.0)
-                            view.controller.setCenter(GeoPoint(centerLat, centerLon))
-
-                            // Dashed offset line between estimated and computed positions
-                            val offsetLine = Polyline()
-                            offsetLine.addPoint(estimatedGeoPoint)
-                            offsetLine.addPoint(computedGeoPoint)
-                            offsetLine.outlinePaint.apply {
-                                color = Color.DKGRAY
-                                strokeWidth = 4f
-                                pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 15f), 0f)
-                                style = android.graphics.Paint.Style.STROKE
+                            // Frame once per result: update runs again on every
+                            // recomposition (e.g. opening the details sheet), and
+                            // re-framing then would undo the user's pan and zoom.
+                            val framePoints = buildList {
+                                add(computedGeoPoint)
+                                if (individualFixes.size > 1) {
+                                    individualFixes.forEach { (lat, lon) -> add(GeoPoint(lat, lon)) }
+                                }
+                                if (hasLops) add(estimatedGeoPoint)
                             }
-                            view.overlays.add(offsetLine)
+                            val frameKey = framePoints.map { it.latitude to it.longitude }
+                            if (framedFor.value != frameKey) {
+                                framedFor.value = frameKey
+                                frameMap(view, framePoints)
+                            }
 
-                            // Markers
-                            addEstimatedMarker(view, context, estimatedGeoPoint)
+                            if (hasLops) {
+                                // Dashed offset line between estimated and computed positions
+                                val offsetLine = Polyline()
+                                offsetLine.addPoint(estimatedGeoPoint)
+                                offsetLine.addPoint(computedGeoPoint)
+                                offsetLine.outlinePaint.apply {
+                                    color = Color.DKGRAY
+                                    strokeWidth = 4f
+                                    pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 15f), 0f)
+                                    style = android.graphics.Paint.Style.STROKE
+                                }
+                                view.overlays.add(offsetLine)
+                                addEstimatedMarker(view, context, estimatedGeoPoint)
+                            }
                             addComputedMarker(view, context, computedGeoPoint)
 
                             // Draw the LOPs
@@ -249,8 +260,6 @@ fun MapScreen(
                     Text(S.positionDetails, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
                     InfoRow(S.computedPosition, "${"%.4f".format(computedGeoPoint.latitude)}, ${"%.4f".format(computedGeoPoint.longitude)}")
-                    InfoRow(S.latLonOffset, "Lat: %.4f, Lon: %.4f".format(computedGeoPoint.latitude - estimatedGeoPoint.latitude, computedGeoPoint.longitude - estimatedGeoPoint.longitude))
-                    InfoRow(S.distanceOffset, "%.2f NM".format(distance))
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -407,6 +416,35 @@ private fun addComputedMarker(mapView: MapView, context: Context, geoPoint: GeoP
     mapView.overlays.add(marker)
 }
 
+/** Closest zoom used when framing; about 19 NM across the card at mid latitudes. */
+private const val FIT_MAX_ZOOM = 12.0
+/** Margin around the framed points, so markers are not cut at the edge. */
+private const val FIT_BORDER_PX = 96
+
+/**
+ * Shows every point in [points], zoomed in no closer than [FIT_MAX_ZOOM].
+ * zoomToBoundingBox needs the view's size, so before the first layout this
+ * centres on the first point and frames properly once the size is known.
+ */
+private fun frameMap(view: MapView, points: List<GeoPoint>) {
+    val frame = {
+        if (points.size == 1) {
+            view.controller.setZoom(FIT_MAX_ZOOM)
+            view.controller.setCenter(points[0])
+        } else {
+            view.zoomToBoundingBox(BoundingBox.fromGeoPointsSafe(points), false,
+                FIT_BORDER_PX, FIT_MAX_ZOOM, null)
+        }
+    }
+    if (view.isLayoutOccurred) {
+        frame()
+    } else {
+        view.controller.setZoom(FIT_MAX_ZOOM)
+        view.controller.setCenter(points[0])
+        view.addOnFirstLayoutListener { _, _, _, _, _ -> frame() }
+    }
+}
+
 private fun addLopLine(mapView: MapView, estimatedPosition: GeoPoint, azimuth: Float, intercept: Float, color: Int) {
     // Convert intercept from nautical miles to meters
     val interceptMeters = intercept * 1852.0
@@ -485,19 +523,4 @@ fun InfoRow(label: String, value: String) {
         Text(label, fontWeight = FontWeight.SemiBold)
         Text(value)
     }
-}
-
-fun calculateDistanceInNauticalMiles(point1: GeoPoint, point2: GeoPoint): Double {
-    val earthRadiusNauticalMiles = 3440.065
-    val lat1Rad = Math.toRadians(point1.latitude)
-    val lon1Rad = Math.toRadians(point1.longitude)
-    val lat2Rad = Math.toRadians(point2.latitude)
-    val lon2Rad = Math.toRadians(point2.longitude)
-
-    val dLon = lon2Rad - lon1Rad
-    val dLat = lat2Rad - lat1Rad
-
-    val a = sin(dLat / 2).pow(2.0) + cos(lat1Rad) * cos(lat2Rad) * sin(dLon / 2).pow(2.0)
-    val c = 2 * asin(kotlin.math.sqrt(a))
-    return earthRadiusNauticalMiles * c
 }

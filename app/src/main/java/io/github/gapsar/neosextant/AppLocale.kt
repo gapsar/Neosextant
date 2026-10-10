@@ -283,8 +283,6 @@ object S {
     val mapResult: String @Composable get() = s("Position Fix", "Position fixée", "Posición fijada")
     val positionDetails: String @Composable get() = s("Position Details", "Détails de la position", "Detalles de la posición")
     val computedPosition: String @Composable get() = s("Computed Position:", "Position calculée :", "Posición calculada:")
-    val latLonOffset: String @Composable get() = s("Lat/Lon Offset:", "Décalage Lat/Long :", "Desfase Lat/Lon:")
-    val distanceOffset: String @Composable get() = s("Distance Offset:", "Décalage de distance :", "Desfase de distancia:")
     val viewDetailedCalc: String @Composable get() = s("View Detailed Calculations", "Voir les calculs détaillés", "Ver los cálculos detallados")
     val lopDetailedCalc: String @Composable get() = s("LOP Detailed Calculations", "Calculs détaillés LOP", "Cálculos detallados LOP")
     @Composable fun observation(n: Int): String = s("Observation $n", "Observation $n", "Observación $n")
