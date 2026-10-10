@@ -9,6 +9,7 @@ database. Usage:
   A) solve_oneshot recovers a known observer from a perfect synthetic solve
   B) calibrate -> apply -> solve round trip returns to truth
   C) _median_fix / _lsq_position_uncertainty behave sanely
+  D) affine calibration + refraction: fit at some attitudes, solve at others
 """
 import sys, types, json, numpy as np
 import os
@@ -107,6 +108,40 @@ for _ in range(4000):
     if found>=6: break
 print(f"B) calibrate->solve round trip: mean {np.mean(errsB):.4f} max {np.max(errsB):.4f} nmi  [expect <0.1]")
 
+# --- D: affine calibration at one set of attitudes, fixes at others ---
+# The sensor physically sees the APPARENT zenith: relative to the catalog
+# boresight tetra3 reports, it sits R(alt) closer to the boresight. Test B
+# cannot catch a refraction mismatch between calibration and solve because it
+# calibrates and solves at the same attitude, where any such error cancels.
+P,T=1000.0,20.0
+refa,refb=erfa.refco(P,T,0.0,0.55)
+def apparent(v):
+    z=np.arccos(np.clip(v[0],-1,1)); perp=v-v[0]*np.array([1.,0,0])
+    tz=np.tan(z); z2=z-(refa*tz+refb*tz**3)
+    return np.cos(z2)*np.array([1.,0,0])+np.sin(z2)*perp/np.linalg.norm(perp)
+def attitude(lo,hi):
+    while True:
+        Q,_=np.linalg.qr(rng.normal(size=(3,3)))
+        if np.linalg.det(Q)<0: Q[2]*=-1
+        v=Q@z_icrs
+        if lo<np.degrees(np.arcsin(np.clip(v[0],-1,1)))<hi: return Q,v
+pairs=[]
+for _ in range(30):
+    Q,v=attitude(15,85); ra,dec,roll=extract(Q); va=apparent(v)
+    meas=[-va[1],va[2],-va[0]]            # ideal accelerometer: A=I, b=0
+    p=json.loads(cn.solve_calibration_pair(ra,dec,roll,tlat,tlon,stamp,P,T))
+    pairs.append({"meas":meas,"mag":cn.G_STANDARD,"exp":p["exp"]})
+fit=json.loads(cn.fit_affine_calibration(json.dumps(pairs)))
+Aff=np.array(fit["A"]).reshape(3,3); baff=np.array(fit["b"])
+errsD=[]
+for _ in range(10):
+    Q,v=attitude(25,70); ra,dec,roll=extract(Q); va=apparent(v)
+    up=Aff@(cn.G_STANDARD*np.array([-va[1],va[2],-va[0]]))+baff; up/=np.linalg.norm(up)
+    f=json.loads(cn.solve_oneshot(ra,dec,roll,*up,stamp,"",P,T))
+    errsD.append(np.hypot((f["fixed_latitude"]-tlat)*60,
+                ((f["fixed_longitude"]-tlon+180)%360-180)*60*np.cos(la)))
+print(f"D) affine calibrate -> solve at new attitudes: mean {np.mean(errsD):.4f} max {np.max(errsD):.4f} nmi  [expect <0.05]")
+
 # --- C: statistics ---
 _,_,r1=cn._median_fix([1.0],[2.0])
 _,_,r7=cn._median_fix(list(rng.normal(0,2/60,7)),list(rng.normal(0,2/60,7)))
@@ -114,5 +149,5 @@ u_good=cn._lsq_position_uncertainty([10.,130.,250.],[1.,-1.,.5])
 u_bad=cn._lsq_position_uncertainty([10.,20.,30.],[1.,-1.,.5])
 print(f"C) n=1 -> {r1} (expect nan), n=7 -> {r7:.2f} nmi")
 print(f"   geometry: spread azimuths {u_good:.2f} nmi vs clustered {u_bad:.2f} nmi  [bad must be larger]")
-ok = max(errsA)<0.01 and np.max(errsB)<0.1 and r1!=r1 and u_bad>u_good
+ok = max(errsA)<0.01 and np.max(errsB)<0.1 and np.max(errsD)<0.05 and r1!=r1 and u_bad>u_good
 print(f"\n{'PASS' if ok else 'FAIL'}")

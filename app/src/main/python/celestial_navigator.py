@@ -622,7 +622,7 @@ def image_processor(image_name, image_path, intrinsics_json_str="{}"):
         try:
             self_calibration.record_sample(centroids_list, orig_width, orig_height)
             if self_calibration.maybe_start_calibration():
-                print("Python: self-calibration pass started in background.")
+                print("Python: self-calibration pass scheduled (runs once the solver is idle).")
         except Exception as e_cal:
             print(f"Python: self-calibration bookkeeping failed: {e_cal}")
 
@@ -1027,6 +1027,34 @@ def _refract_zenith_in_camera(v_cam, pressure_hpa, temperature_c, sign, label=""
     return out
 
 
+def _camera_rotation(ra_deg, dec_deg, roll_deg):
+    """tetra3's rotation matrix R (ICRS -> camera) rebuilt from RA/Dec/Roll.
+
+    Rows of R are the camera axes expressed in ICRS:
+      Row 0 = boresight (into sky)
+      Row 1 = "left" in the solved image = cos(roll)*E + sin(roll)*N
+      Row 2 = "up" in the solved image   = -sin(roll)*E + cos(roll)*N
+    where E is east in the equatorial plane and N points toward the NCP,
+    both perpendicular to the boresight. tetra3 extracts its angles as
+      RA   = atan2(R[0,1], R[0,0])
+      Dec  = atan2(R[0,2], norm(R[1:3, 2]))
+      Roll = atan2(R[1,2], R[2,2])
+    """
+    ra_rad = np.radians(float(ra_deg))
+    dec_rad = np.radians(float(dec_deg))
+    roll_rad = np.radians(float(roll_deg))
+
+    cos_ra, sin_ra = np.cos(ra_rad), np.sin(ra_rad)
+    cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
+    cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
+
+    b = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
+    E = np.array([-sin_ra, cos_ra, 0.0])
+    N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
+
+    return np.array([b, cos_roll * E + sin_roll * N, -sin_roll * E + cos_roll * N])
+
+
 # --- 1-SHOT FIX CALCULATION ---
 def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path,
                   pressure_hpa=1013.25, temperature_c=15.0):
@@ -1080,34 +1108,10 @@ def solve_oneshot(ra_deg, dec_deg, roll_deg, gx, gy, gz, time_iso, image_path,
         #   Dec  = atan2(R[0,2], norm(R[1:3, 2]))
         #   Roll = atan2(R[1,2], R[2,2])
 
-        ra_rad  = np.radians(float(ra_deg))
-        dec_rad = np.radians(float(dec_deg))
-        roll_rad = np.radians(float(roll_deg))
-
-        cos_ra, sin_ra   = np.cos(ra_rad),  np.sin(ra_rad)
-        cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
-        cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
-
-        # Boresight in ICRS (Row 0)
-        b = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
-
-        # "East" direction (perpendicular to boresight in equatorial plane)
-        E = np.array([-sin_ra, cos_ra, 0.0])
-
-        # "North" direction (toward NCP, projected perpendicular to boresight)
-        N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
-
-        # Apply roll rotation around boresight
-        # Row 1 (camera "left") = cos(roll)*E + sin(roll)*N
-        # Row 2 (camera "up")   = -sin(roll)*E + cos(roll)*N
-        row1 = cos_roll * E + sin_roll * N
-        row2 = -sin_roll * E + cos_roll * N
-
-        # Full rotation matrix: ICRS → camera
-        R = np.array([b, row1, row2])
+        R = _camera_rotation(ra_deg, dec_deg, roll_deg)
 
         print(f"Python: 1-Shot: RA={ra_deg:.4f}°, Dec={dec_deg:.4f}°, Roll={roll_deg:.4f}°")
-        print(f"Python: 1-Shot: R[0]={b}")
+        print(f"Python: 1-Shot: R[0]={R[0]}")
 
         # --- 3. Map zenith from Android sensor frame to tetra3 camera frame ---
         # Android accelerometer already outputs the ZENITH direction (reaction
@@ -1567,72 +1571,11 @@ def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lo
     from the true latitude/longitude, time, and image orientation.
     """
     try:
-        import numpy as np
-        from astropy.time import Time
-
-        # 1. Expected Zenith in ICRS
-        t = Time(time_iso)
-        era_deg = t.earth_rotation_angle('tio').deg
-        lst_deg = (lon_deg + era_deg) % 360
-
-        # lon + ERA is a right ascension in CIRS, not ICRS: ERA is measured
-        # about the CIP from the CIO. R, from tetra3, maps ICRS -> camera, so
-        # the zenith must be rotated out of CIRS before being multiplied by it.
-        # Omitting this bakes the ~0.15 deg CIP offset (see solve_oneshot) into
-        # the fitted offsets, which then over-corrects every later fix by that
-        # amount.
-        lat_rad = np.radians(lat_deg)
-        lst_rad = np.radians(lst_deg)
-        zenith_cirs = np.array([
-            np.cos(lat_rad) * np.cos(lst_rad),
-            np.cos(lat_rad) * np.sin(lst_rad),
-            np.sin(lat_rad)
-        ])
-        _tt = t.tt
-        zenith_icrs = erfa.c2i06a(_tt.jd1, _tt.jd2).T @ zenith_cirs
-
-        # 2. Camera rotation matrix R (ICRS -> camera)
-        ra_rad = np.radians(float(ra_deg))
-        dec_rad = np.radians(float(dec_deg))
-        roll_rad = np.radians(float(roll_deg))
-
-        cos_ra, sin_ra = np.cos(ra_rad), np.sin(ra_rad)
-        cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
-        cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
-
-        b = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
-        E = np.array([-sin_ra, cos_ra, 0.0])
-        N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
-
-        row1 = cos_roll * E + sin_roll * N
-        row2 = -sin_roll * E + cos_roll * N
-        R = np.array([b, row1, row2])
-
-        # 3. Expected Zenith in camera frame
-        v_cam_exp = R @ zenith_icrs
-
-        # The sensor does not measure the zenith relative to the CATALOG
-        # boresight that tetra3 reports — it measures it relative to where the
-        # camera physically pointed, which refraction places R(alt) away. Undo
-        # that here (sign=-1) so the fitted offset describes the mounting error
-        # alone. solve_oneshot applies the same rotation with sign=+1; the two
-        # must always be a matched pair.
-        v_cam_exp = _refract_zenith_in_camera(v_cam_exp, pressure_hpa,
-                                              temperature_c, sign=-1,
-                                              label="Calib: ")
-
-        # 4. Expected gravity in sensor frame
-        # v_cam = [-gz, -gx, gy] (portrait solve frame; must match solve_oneshot)
-        # So expected gravity in sensor:
-        gx_exp = -v_cam_exp[1]
-        gy_exp = v_cam_exp[2]
-        gz_exp = -v_cam_exp[0]
-        v_exp = np.array([gx_exp, gy_exp, gz_exp])
-
-        # Normalize expected vector
-        v_exp_norm = np.linalg.norm(v_exp)
-        if v_exp_norm > 1e-6:
-            v_exp = v_exp / v_exp_norm
+        # Expected gravity in the sensor frame, refraction included: the one
+        # geometry shared with the affine pair collector.
+        v_exp = _expected_gravity_sensor(ra_deg, dec_deg, roll_deg, lat_deg,
+                                         lon_deg, time_iso, pressure_hpa,
+                                         temperature_c)
 
         # Measured gravity in sensor frame
         v_meas = np.array([float(gx), float(gy), float(gz)])
@@ -1719,19 +1662,26 @@ def solve_calibration_offsets(ra_deg, dec_deg, roll_deg, gx, gy, gz, lat_deg, lo
 # attitude spread is collected. Neither function touches the legacy path.
 # -----------------------------------------------------------------------------
 
-def _expected_gravity_sensor(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso):
-    """Expected gravity (down) unit vector in the sensor frame. Shared geometry
-    with solve_calibration_offsets — kept identical on purpose."""
-    import numpy as np
+def _expected_gravity_sensor(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso,
+                             pressure_hpa=1013.25, temperature_c=15.0):
+    """Expected zenith ("up") unit vector in the sensor frame for a shot whose
+    plate solve is (ra, dec, roll), taken at a known position and time.
+
+    This is what the accelerometer SHOULD read, so it includes refraction:
+    solve_oneshot adds R(alt) back to the measured zenith, and anything fitted
+    against this vector (pitch/roll offsets or the affine model) must see the
+    same refraction removed, or every later fix is biased by R(alt)."""
     from astropy.time import Time
 
     t = Time(time_iso)
     era_deg = t.earth_rotation_angle('tio').deg
     lst_deg = (lon_deg + era_deg) % 360
 
-    # lon + ERA is a right ascension in CIRS, not ICRS — see the note in
-    # solve_calibration_offsets. R maps ICRS -> camera, so rotate out of CIRS
-    # first or the CIP offset is baked into the fitted model.
+    # lon + ERA is a right ascension in CIRS, not ICRS: ERA is measured about
+    # the CIP from the CIO. R, from tetra3, maps ICRS -> camera, so the zenith
+    # must be rotated out of CIRS first. Omitting this bakes the ~0.15 deg CIP
+    # offset (see solve_oneshot) into the fitted calibration, which then
+    # over-corrects every later fix by that amount.
     lat_rad = np.radians(lat_deg)
     lst_rad = np.radians(lst_deg)
     zenith_cirs = np.array([
@@ -1742,25 +1692,19 @@ def _expected_gravity_sensor(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_i
     _tt = t.tt
     zenith_icrs = erfa.c2i06a(_tt.jd1, _tt.jd2).T @ zenith_cirs
 
-    ra_rad = np.radians(float(ra_deg))
-    dec_rad = np.radians(float(dec_deg))
-    roll_rad = np.radians(float(roll_deg))
+    v_cam_exp = _camera_rotation(ra_deg, dec_deg, roll_deg) @ zenith_icrs
 
-    cos_ra, sin_ra = np.cos(ra_rad), np.sin(ra_rad)
-    cos_dec, sin_dec = np.cos(dec_rad), np.sin(dec_rad)
-    cos_roll, sin_roll = np.cos(roll_rad), np.sin(roll_rad)
+    # The sensor does not measure the zenith relative to the CATALOG boresight
+    # that tetra3 reports — it measures it relative to where the camera
+    # physically pointed, which refraction places R(alt) away. Undo that here
+    # (sign=-1) so the fitted calibration describes the sensor alone.
+    # solve_oneshot applies the same rotation with sign=+1; the two must always
+    # be a matched pair.
+    v_cam_exp = _refract_zenith_in_camera(v_cam_exp, pressure_hpa,
+                                          temperature_c, sign=-1,
+                                          label="Calib: ")
 
-    b_axis = np.array([cos_dec * cos_ra, cos_dec * sin_ra, sin_dec])
-    E = np.array([-sin_ra, cos_ra, 0.0])
-    N = np.array([-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec])
-
-    row1 = cos_roll * E + sin_roll * N
-    row2 = -sin_roll * E + cos_roll * N
-    R = np.array([b_axis, row1, row2])
-
-    v_cam_exp = R @ zenith_icrs
-
-    # Camera->sensor mapping, identical to solve_calibration_offsets:
+    # Camera -> sensor, the inverse of solve_oneshot's portrait mapping
     #   v_cam = [-gz, -gx, gy]  ->  gx = -v_cam[1], gy = v_cam[2], gz = -v_cam[0]
     v_exp = np.array([-v_cam_exp[1], v_cam_exp[2], -v_cam_exp[0]])
     n = np.linalg.norm(v_exp)
@@ -1769,13 +1713,15 @@ def _expected_gravity_sensor(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_i
     return v_exp
 
 
-def solve_calibration_pair(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso):
+def solve_calibration_pair(ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso,
+                           pressure_hpa=1013.25, temperature_c=15.0):
     """Returns the expected gravity direction (sensor frame, unit) for one
     1-Shot capture, so the app can pair it with the measured raw gravity for an
     affine fit. Does not solve or collapse anything."""
     try:
         v_exp = _expected_gravity_sensor(
-            ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso
+            ra_deg, dec_deg, roll_deg, lat_deg, lon_deg, time_iso,
+            pressure_hpa, temperature_c
         )
         return json.dumps({
             "exp": [float(v_exp[0]), float(v_exp[1]), float(v_exp[2])],

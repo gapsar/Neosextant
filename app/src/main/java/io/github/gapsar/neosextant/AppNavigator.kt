@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -248,6 +249,8 @@ fun AppNavigator(
                 stopPitchAveraging = stopPitchAveraging,
                 markCalibrationUsed = markCalibrationUsed,
                 analysisJobs = vm.analysisJobs,
+                processingScope = vm.viewModelScope,
+                fixSolve = vm.fixSolve,
                 isRedTintMode = isRedTintMode,
                 sensorPipeline = sensorPipeline,
                 getCalibrationOffset = getCalibrationOffset,

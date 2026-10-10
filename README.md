@@ -32,7 +32,7 @@ It performs real **on-device astrometry** (commonly called "plate-solving") usin
 | **Offline Map Display** | View your calculated fix on an interactive map powered by [osmdroid](https://github.com/osmdroid/osmdroid). |
 | **Multi-Language** | Full support for **English**, **French**, and **Spanish**. |
 | **Sensor Calibration** | Built-in horizon-based calibration to correct device pitch errors for accurate altitude readings. |
-| **Precision Time Sync** | Opportunistic NTP sync with GPS fallback — because accurate time is everything in celestial navigation. |
+| **Precision Time Sync** | Opportunistic NTP sync, carried on the phone's monotonic clock so it stays valid offline — because accurate time is everything in celestial navigation. |
 | **Observation History** | Persistent storage of all navigational fixes via a local Room database. |
 | **Interactive Tutorial** | A first-launch onboarding experience to get new users up to speed quickly. |
 

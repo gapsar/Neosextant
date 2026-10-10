@@ -96,6 +96,10 @@ _cached_cal = None
 _cached_mtime = None
 _last_sample_time = 0.0   # time.time() of the most recent record_sample
 _sample_count = None      # cached line count, so the file is not re-read per frame
+# Sequence number of the newest sample. Monotonic across trims, unlike the
+# line count, so "samples since the last pass" can always be computed; the
+# line count drops by a third at every trim and could leave a pass never due.
+_last_seq = None
 
 
 def _storage_dir() -> Path:
@@ -120,6 +124,33 @@ def _count_lines(path) -> int:
             return sum(1 for _ in fh)
     except OSError:
         return 0
+
+
+def _scan_samples(path):
+    """(line count, sequence number of the newest sample). Samples written
+    before sequence numbers existed count as their line position."""
+    count, last = 0, None
+    try:
+        with open(path) as fh:
+            for line in fh:
+                count += 1
+                last = line
+    except OSError:
+        return 0, 0
+    seq = count
+    if last:
+        try:
+            seq = int(json.loads(last).get("n", count))
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return count, seq
+
+
+def _ensure_counts():
+    """Load the cached counters from disk once. Caller holds _lock."""
+    global _sample_count, _last_seq
+    if _sample_count is None or _last_seq is None:
+        _sample_count, _last_seq = _scan_samples(_samples_path())
 
 
 def _samples_path() -> Path:
@@ -160,51 +191,52 @@ def active_params() -> dict:
 def record_sample(centroids, width, height) -> int:
     """Append one frame's raw (pre-undistortion) centroids to the rolling
     store. Returns the total number of samples recorded so far."""
-    global _last_sample_time, _sample_count
+    global _last_sample_time, _sample_count, _last_seq
     path = _samples_path()
-    rec = {"t": time.time(), "w": int(width), "h": int(height),
-           "c": [[float(y), float(x)] for y, x in centroids]}
     with _lock:
+        _ensure_counts()
+        _last_seq += 1
+        rec = {"t": time.time(), "n": _last_seq, "w": int(width),
+               "h": int(height),
+               "c": [[float(y), float(x)] for y, x in centroids]}
         with open(path, "a") as fh:
             fh.write(json.dumps(rec) + "\n")
-        # Counting by re-reading the whole file ran once per solved frame. Keep
-        # a running count instead and only touch the file when it is unknown.
-        if _sample_count is None:
-            _sample_count = _count_lines(path)
-        else:
-            _sample_count += 1
-        n = _sample_count
-        if n > int(MAX_SAMPLES * 1.5):        # occasional trim, keep newest
+        _sample_count += 1
+        if _sample_count > int(MAX_SAMPLES * 1.5):   # occasional trim, keep newest
             with open(path) as fh:
                 lines = fh.readlines()[-MAX_SAMPLES:]
             tmp = path.with_suffix(".tmp")
             tmp.write_text("".join(lines))
             tmp.replace(path)
-            n = _sample_count = len(lines)
+            _sample_count = len(lines)
         _last_sample_time = time.time()
-    return n
+        return _last_seq
+
+
+def _current_seq() -> int:
+    with _lock:
+        _ensure_counts()
+        return _last_seq
 
 
 def maybe_start_calibration() -> bool:
-    """Spawn a background calibration pass if one is due. Returns True if a
-    pass was started. Never blocks the caller's solve."""
+    """Schedule a background calibration pass if one is due. Returns True if a
+    pass was scheduled. Never blocks the caller's solve.
+
+    This is called right after record_sample, so the solver is by definition
+    busy at that moment. The pass is therefore not started here: the thread
+    first waits until no frame has been recorded for QUIET_PERIOD_S, i.e. the
+    burst has finished. Checking for quiet here instead would never succeed.
+    """
     global _running
     with _lock:
         if _running:
             return False
-        # Do not compete with a burst that is still being solved.
-        idle = time.time() - _last_sample_time
-        if idle < QUIET_PERIOD_S:
-            return False
-        n = _sample_count if _sample_count is not None \
-            else _count_lines(_samples_path())
+        _ensure_counts()
+        n = _last_seq
         if n == 0:
             return False
-        state = {}
-        try:
-            state = json.loads(_state_path().read_text())
-        except Exception:
-            pass
+        state = _read_state()
         seen = int(state.get("samples_seen_at_last_run", 0))
         first_run = "status" not in state
         due = (n >= BOOTSTRAP_MIN_SAMPLES) if first_run \
@@ -216,6 +248,17 @@ def maybe_start_calibration() -> bool:
                          name="selfcal")
     t.start()
     return True
+
+
+def _wait_for_quiet():
+    """Block until no frame has been recorded for QUIET_PERIOD_S. A new frame
+    arriving while waiting (the next shot of a burst) pushes the start back."""
+    while True:
+        with _lock:
+            idle = time.time() - _last_sample_time
+        if idle >= QUIET_PERIOD_S:
+            return
+        time.sleep(QUIET_PERIOD_S - idle)
 
 
 def calibration_status() -> dict:
@@ -239,6 +282,7 @@ def calibration_status() -> dict:
 def _calibration_thread():
     global _running
     try:
+        _wait_for_quiet()
         run_calibration()
     except Exception as e:  # never crash the app from the daemon thread
         print(f"Python selfcal: calibration pass failed: {e}")
@@ -349,11 +393,7 @@ def run_calibration() -> dict:
     thread). Returns the state dict that was written."""
     t0 = time.time()
     samples = _load_samples()
-    n_total = 0
-    try:
-        n_total = _count_lines(_samples_path())
-    except OSError:
-        pass
+    n_total = _current_seq()
     print(f"Python selfcal: pass starting on {len(samples)} samples")
 
     # --- Stage 1: ladder probe -> best database + frozen FOV --------------
@@ -411,8 +451,8 @@ def run_calibration() -> dict:
     state = {"version": 1, "samples_seen_at_last_run": n_total,
              "updated": time.strftime("%Y-%m-%dT%H:%M:%S")}
     if best is None or best[0] < MIN_CONFIDENT:
-        state["status"] = "insufficient"
         state["n_confident"] = 0 if best is None else best[0]
+        _finish_without_adopting(state, "insufficient")
         _write_state(state)
         print("Python selfcal: not enough confident solves; keeping current "
               "calibration")
@@ -437,27 +477,33 @@ def run_calibration() -> dict:
           f"{score_new} vs current {score_cur}")
 
     if score_new >= max(score_cur, MIN_CONFIDENT):
-        state.update({"status": "calibrated", "db_name": db_name,
+        state.update({"status": "calibrated", "last_pass": "adopted",
+                      "db_name": db_name,
                       "fov_estimate": fov_frozen, "fov_max_error": fov_err,
                       "k1": k1, "k2": k2, "n_confident": n_conf,
                       "n_distortion_pairs": n_pairs,
                       "score_new": score_new, "score_previous": score_cur})
     else:
-        state.update({"status": "rejected", "n_confident": n_conf,
+        state.update({"n_confident": n_conf,
                       "score_new": score_new, "score_previous": score_cur})
-        # keep an adopted calibration from an earlier pass, if any
-        prev = {}
-        try:
-            prev = json.loads(_state_path().read_text())
-        except Exception:
-            pass
-        if prev.get("status") == "calibrated":
-            state.update({k: prev[k] for k in DEFAULTS})
-            state["status"] = "calibrated"
+        _finish_without_adopting(state, "rejected")
     _write_state(state)
     print(f"Python selfcal: pass finished in {time.time() - t0:.1f}s "
           f"-> {state['status']}")
     return state
+
+
+def _finish_without_adopting(state: dict, outcome: str):
+    """Fill in `state` for a pass that adopted nothing. A calibration adopted
+    by an earlier pass is carried over, so one cloudy or unlucky pass never
+    silently reverts this phone to the shipped Pixel 8a defaults."""
+    state["last_pass"] = outcome
+    prev = _read_state()
+    if prev.get("status") == "calibrated" and all(k in prev for k in DEFAULTS):
+        state.update({k: prev[k] for k in DEFAULTS})
+        state["status"] = "calibrated"
+    else:
+        state["status"] = outcome
 
 
 def _read_state() -> dict:

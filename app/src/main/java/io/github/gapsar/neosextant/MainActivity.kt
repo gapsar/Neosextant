@@ -108,6 +108,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         private const val MIN_EXPOSURE_WINDOW_SAMPLES = 5
         /** Weighting steepness: 0.5 rad/s → weight ≈ 0.14, 1.0 rad/s → weight ≈ 0.0003. */
         private const val GYRO_WEIGHT_K = 8.0
+
+        /** An event older than this on arrival is not on the elapsedRealtime base. */
+        private const val MAX_SENSOR_EVENT_AGE_NS = 1_000_000_000L
     }
 
     // Permission for Notifications
@@ -178,8 +181,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         Configuration.getInstance().tileFileSystemCacheTrimBytes = 40L * 1024 * 1024
 
         // S-04: Delete orphaned .jpg files from app storage root on startup
-        // These are full-resolution captures from previous sessions that were never cleaned up
-        cleanupOrphanedImages()
+        // These are full-resolution captures from previous sessions that were never cleaned up.
+        // Fresh launches only: on a recreation (rotation, dark mode, locale) the retained
+        // ViewModel still references this session's captures, some still being analysed.
+        if (savedInstanceState == null) {
+            cleanupOrphanedImages()
+        }
         
         // Ensure Chaquopy temp dir exists to prevent offline startup crash
         val chaquopyTmpDir = java.io.File(cacheDir, "chaquopy/tmp")
@@ -444,7 +451,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             StabilityWeightedSample(
                                 fusedGravity,
                                 currentGyroMagnitude,
-                                android.os.SystemClock.elapsedRealtimeNanos(),
+                                sampleTimestampNs(it.timestamp),
                                 rawFusedGravity,
                                 rawAccelMag
                             )
@@ -670,6 +677,27 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             SensorCalibrator.Vec3((rx / tw).toFloat(), (ry / tw).toFloat(), (rz / tw).toFloat()),
             rm / tw, tw
         )
+    }
+
+    @Volatile private var warnedSensorClock = false
+
+    /**
+     * When a sensor sample was actually taken, on the elapsedRealtimeNanos base
+     * the camera's exposure window uses. Delivery trails the sample by tens of
+     * ms, more when the HAL batches, which would shift the gravity average off
+     * the exposure. A few HALs stamp events on another clock; for those the
+     * arrival time is the best available.
+     */
+    private fun sampleTimestampNs(eventTimestampNs: Long): Long {
+        val now = android.os.SystemClock.elapsedRealtimeNanos()
+        val age = now - eventTimestampNs
+        if (age in 0..MAX_SENSOR_EVENT_AGE_NS) return eventTimestampNs
+        if (!warnedSensorClock) {
+            warnedSensorClock = true
+            Log.w("MainActivity", "Sensor timestamps are not on the elapsedRealtime clock " +
+                "(age ${age / 1_000_000} ms); using arrival time")
+        }
+        return now
     }
 
     private fun describe(e: ExposureWindow?): String =

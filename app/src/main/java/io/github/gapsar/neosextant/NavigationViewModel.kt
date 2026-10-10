@@ -62,6 +62,19 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
     // M-01: Thread-safe analysis job tracker (moved from MainActivity)
     val analysisJobs = ConcurrentHashMap<Long, Job>()
 
+    /**
+     * The position-fix computation for the current session. It runs in
+     * viewModelScope rather than the camera screen's scope, so leaving the
+     * screen mid-solve (settings, help, rotation) no longer throws the fix away.
+     */
+    class FixSolveState {
+        val isSolving = mutableStateOf(false)
+        val error = mutableStateOf<String?>(null)
+        /** The solve in flight; a newer solve cancels it so results can't land out of order. */
+        var job: Job? = null
+    }
+    val fixSolve = FixSolveState()
+
     // --- Debug Sensor Logger ---
     var debugRawAccel = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")
     var debugRawGyro = mutableStateOf("X: 0.00, Y: 0.00, Z: 0.00")

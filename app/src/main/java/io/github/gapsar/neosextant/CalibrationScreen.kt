@@ -541,7 +541,11 @@ fun CalibrationScreen(
                                                         "solve_calibration_pair",
                                                         ra, dec, roll,
                                                         latSigned, lonSigned,
-                                                        captureTimeIso
+                                                        captureTimeIso,
+                                                        // Same refraction inputs as the 1-Shot solve,
+                                                        // which adds back what this removes.
+                                                        pressure.toDoubleOrNull() ?: 1013.25,
+                                                        temperature.toDoubleOrNull() ?: 15.0
                                                     ).toString()
                                                     val pairJson = org.json.JSONObject(pairStr)
                                                     val pairErr = pairJson.optString("error")
