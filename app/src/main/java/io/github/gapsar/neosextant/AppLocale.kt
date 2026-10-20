@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import io.github.gapsar.neosextant.model.SolverMode
+import java.util.Locale
 
 enum class AppLocale(val displayName: String, val flag: String) {
     EN("English", "🇬🇧"),
@@ -325,6 +326,34 @@ object S {
     val clearAll: String @Composable get() = s("Clear All", "Tout effacer", "Borrar todo")
     val noRecordedPositions: String @Composable get() = s("No recorded positions yet.", "Aucune position enregistrée pour l’instant.", "Ninguna posición registrada por ahora.")
     val deleteEntry: String @Composable get() = s("Delete", "Supprimer", "Eliminar")
+
+    // ─── True position (evaluation only) ────────────────────────────────────────
+    val truePosition: String @Composable get() = s("True position", "Position vraie", "Posición real")
+    val truePositionHelp: String @Composable get() = s(
+        "Your real position (ship's GPS, chart), only to measure the error of the fix. Decimal degrees, or degrees and minutes: 47 12.345 N.",
+        "Votre position réelle (GPS du bord, carte), seulement pour mesurer l’erreur du point. Degrés décimaux, ou degrés et minutes : 47 12.345 N.",
+        "Su posición real (GPS del barco, carta), solo para medir el error de la posición. Grados decimales, o grados y minutos: 47 12.345 N.")
+    val truthTimeLabel: String @Composable get() = s("Time read (UTC)", "Heure de lecture (UTC)", "Hora de lectura (UTC)")
+    val truthTimeInvalid: String @Composable get() = s("Format: yyyy-MM-dd HH:mm:ss", "Format : aaaa-MM-jj HH:mm:ss", "Formato: aaaa-MM-dd HH:mm:ss")
+    val coordinateInvalid: String @Composable get() = s("Not a valid coordinate", "Coordonnée non valide", "Coordenada no válida")
+    val save: String @Composable get() = s("Save", "Enregistrer", "Guardar")
+    val clear: String @Composable get() = s("Clear", "Effacer", "Borrar")
+    @Composable fun fixError(nm: Double): String =
+        s("Error: %.2f NM", "Erreur : %.2f NM", "Error: %.2f NM").format(Locale.US, nm)
+    @Composable fun truthTimeGap(minutes: Double): String {
+        val m = "%.0f".format(Locale.US, kotlin.math.abs(minutes))
+        return if (minutes < 0) s("read $m min before the fix", "lue $m min avant le point", "leída $m min antes de la posición")
+        else s("read $m min after the fix", "lue $m min après le point", "leída $m min después de la posición")
+    }
+    val referencePosition: String @Composable get() = s("Reference position", "Position de référence", "Posición de referencia")
+    val referencePositionHelp: String @Composable get() = s(
+        "Copied as the true position into each new fix, with the time you saved it. Only used to measure the error.",
+        "Copiée comme position vraie dans chaque nouveau point, avec l’heure de l’enregistrement. Sert seulement à mesurer l’erreur.",
+        "Se copia como posición real en cada nueva posición, con la hora en que la guardó. Solo sirve para medir el error.")
+    val saveReferenceNow: String @Composable get() = s("Save (time = now)", "Enregistrer (heure = maintenant)", "Guardar (hora = ahora)")
+    @Composable fun referenceSaved(time: String): String =
+        s("Saved at $time UTC", "Enregistrée à $time UTC", "Guardada a las $time UTC")
+    val referenceNotSet: String @Composable get() = s("Not set", "Non définie", "No definida")
 
     // ─── Image Viewer ───────────────────────────────────────────────────────────
     val showStars: String @Composable get() = s("Show Stars", "Afficher les étoiles", "Mostrar las estrellas")

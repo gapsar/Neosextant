@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +28,25 @@ fun HistoryScreen(
 ) {
     // State to hold the list of entries
     var entries by remember { mutableStateOf(historyRepository.getHistory()) }
+    var truthEditEntry by remember { mutableStateOf<PositionEntry?>(null) }
+
+    truthEditEntry?.let { entry ->
+        fun saveTruth(t: TruthPosition?) {
+            historyRepository.saveEntry(entry.copy(
+                truthLatitude = t?.latitude, truthLongitude = t?.longitude, truthTimeUtc = t?.timeUtc))
+            entries = historyRepository.getHistory()
+            truthEditEntry = null
+        }
+        TruthPositionDialog(
+            title = S.truePosition,
+            initial = entry.truth(),
+            defaultTimeUtc = fixTimeUtc(entry) ?: TruthPositions.nowUtc(),
+            showTime = true,
+            onSave = { saveTruth(it) },
+            onClear = { saveTruth(null) },
+            onDismiss = { truthEditEntry = null }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -75,6 +95,7 @@ fun HistoryScreen(
                         HistoryCard(
                             entry = entry,
                             onClick = { onViewOnMap(entry) },
+                            onEditTruth = { truthEditEntry = entry },
                             onDelete = {
                                 historyRepository.deleteEntry(entry.id)
                                 entries = historyRepository.getHistory()
@@ -87,8 +108,22 @@ fun HistoryScreen(
     }
 }
 
+fun PositionEntry.truth(): TruthPosition? {
+    val lat = truthLatitude ?: return null
+    val lon = truthLongitude ?: return null
+    return TruthPosition(lat, lon, truthTimeUtc ?: "")
+}
+
+/** UTC time of the first shot of the fix, in the shot timestamp format. */
+private fun fixTimeUtc(entry: PositionEntry): String? = try {
+    org.json.JSONArray(entry.imagesJson ?: "[]").optJSONObject(0)
+        ?.optString("timestamp")?.takeIf { it.isNotEmpty() }
+} catch (_: Exception) { null }
+
 @Composable
-fun HistoryCard(entry: PositionEntry, onClick: () -> Unit, onDelete: () -> Unit) {
+fun HistoryCard(entry: PositionEntry, onClick: () -> Unit, onEditTruth: () -> Unit, onDelete: () -> Unit) {
+    val truth = entry.truth()
+    val fixTime = remember(entry) { fixTimeUtc(entry) }
     val latStr = String.format(Locale.US, "%.5f°", entry.latitude)
     val lonStr = String.format(Locale.US, "%.5f°", entry.longitude)
     val errStr = if (entry.errorEstimateNm != null) {
@@ -125,7 +160,34 @@ fun HistoryCard(entry: PositionEntry, onClick: () -> Unit, onDelete: () -> Unit)
                         Text("Err: $errStr", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                 }
+                if (truth != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    val errorNm = TruthPositions.distanceNm(entry.latitude, entry.longitude, truth.latitude, truth.longitude)
+                    val gapS = fixTime?.let { TruthPositions.secondsBetween(it, truth.timeUtc) }
+                    Text(
+                        S.fixError(errorNm) + (gapS?.takeIf { kotlin.math.abs(it) > 60.0 }
+                            ?.let { " (" + S.truthTimeGap(it / 60.0) + ")" } ?: ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
+
+            IconButton(
+                onClick = onEditTruth,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Place,
+                    contentDescription = S.truePosition,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
 
             IconButton(
                 onClick = onDelete,

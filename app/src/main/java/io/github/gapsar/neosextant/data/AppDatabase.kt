@@ -16,7 +16,15 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [PositionEntryEntity::class], version = 2, exportSchema = false)
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE position_history ADD COLUMN truthLatitude REAL DEFAULT NULL")
+        db.execSQL("ALTER TABLE position_history ADD COLUMN truthLongitude REAL DEFAULT NULL")
+        db.execSQL("ALTER TABLE position_history ADD COLUMN truthTimeUtc TEXT DEFAULT NULL")
+    }
+}
+
+@Database(entities = [PositionEntryEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
 
@@ -31,7 +39,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "neosextant_database"
                 )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .allowMainThreadQueries()
                 .build()
                 INSTANCE = instance

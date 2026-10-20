@@ -108,6 +108,8 @@ fun SettingsScreen(
                 Text(S.viewPositionHistory)
             }
 
+            ReferencePositionRow()
+
             Spacer(modifier = Modifier.height(16.dp))
             
             Button(
@@ -517,4 +519,48 @@ fun TimeSyncStatus() {
     }
     
     Text(text, style = MaterialTheme.typography.bodySmall, color = color, fontWeight = FontWeight.SemiBold)
+}
+
+/** The reference position copied as the true position into each new fix. */
+@Composable
+private fun ReferencePositionRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var reference by remember { mutableStateOf(TruthPositions.loadReference(context)) }
+    var showDialog by remember { mutableStateOf(false) }
+
+    OutlinedButton(onClick = { showDialog = true }, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(S.referencePosition)
+            val r = reference
+            Text(
+                if (r == null) S.referenceNotSet
+                else "%.5f°, %.5f° · ".format(java.util.Locale.US, r.latitude, r.longitude) +
+                    S.referenceSaved(r.timeUtc.replace('T', ' ').substringBefore('.')),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    Text(S.referencePositionHelp, style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+    if (showDialog) {
+        TruthPositionDialog(
+            title = S.referencePosition,
+            initial = reference,
+            defaultTimeUtc = TruthPositions.nowUtc(),
+            showTime = false,
+            onSave = {
+                TruthPositions.saveReference(context, it)
+                reference = it
+                showDialog = false
+            },
+            onClear = {
+                TruthPositions.clearReference(context)
+                reference = null
+                showDialog = false
+            },
+            onDismiss = { showDialog = false }
+        )
+    }
 }

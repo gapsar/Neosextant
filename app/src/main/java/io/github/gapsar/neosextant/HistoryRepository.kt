@@ -15,7 +15,12 @@ data class PositionEntry(
     val mode: String, // "ITERATIVE" or "LOP"
     val estimatedLatitude: Double = 0.0,
     val estimatedLongitude: Double = 0.0,
-    val imagesJson: String? = null
+    val imagesJson: String? = null,
+    // True position typed by the user, and the UTC time it was read: only
+    // used to measure the error of the fix.
+    val truthLatitude: Double? = null,
+    val truthLongitude: Double? = null,
+    val truthTimeUtc: String? = null
 )
 
 class HistoryRepository(private val context: Context) {

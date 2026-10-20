@@ -352,6 +352,7 @@ fun FixSolveTrigger(
                     val modeStr = if (solverMode == SolverMode.ITERATIVE) "ITERATIVE" else if (solverMode == SolverMode.ONE_SHOT) "ONE_SHOT" else "LOP"
                     val imagesJsonStr = HistoryRepository.serializeImages(finalImages)
                 
+                    val reference = TruthPositions.loadReference(appContext)
                     withContext(Dispatchers.IO) {
                         historyRepository.saveEntry(
                             PositionEntry(
@@ -362,7 +363,10 @@ fun FixSolveTrigger(
                                 mode = modeStr,
                                 estimatedLatitude = latitude.toDoubleOrNull() ?: 0.0,
                                 estimatedLongitude = longitude.toDoubleOrNull() ?: 0.0,
-                                imagesJson = imagesJsonStr
+                                imagesJson = imagesJsonStr,
+                                truthLatitude = reference?.latitude,
+                                truthLongitude = reference?.longitude,
+                                truthTimeUtc = reference?.timeUtc
                             )
                         )
                     }
