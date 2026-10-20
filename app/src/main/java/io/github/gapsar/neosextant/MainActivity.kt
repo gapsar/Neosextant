@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // Buffers for debugging/logging
     private var lastRawAccel = FloatArray(3)
     private var lastRawGyro = FloatArray(3)
+    private var lastGyroEventNs = 0L
     private var lastAndroidGrav = FloatArray(3)
     private var lastKalmanCal = FloatArray(3)
     private var lastKalmanRaw = FloatArray(3)
@@ -363,6 +364,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     lastRawGyro[0] = it.values[0]
                     lastRawGyro[1] = it.values[1]
                     lastRawGyro[2] = it.values[2]
+                    lastGyroEventNs = sampleTimestampNs(it.timestamp)
                     // Feed gyro data to fusion filter for gravity prediction
                     sensorFusion.onGyroscopeChanged(
                         it.values[0], it.values[1], it.values[2],
@@ -484,6 +486,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     if (sensorDataLogger.isRecording()) {
                         sensorDataLogger.logData(
                             timestamp = currentTs,
+                            eventTimeNs = sampleTimestampNs(it.timestamp),
+                            gyroEventTimeNs = lastGyroEventNs,
                             rawAccel = lastRawAccel,
                             rawGyro = lastRawGyro,
                             kalmanCal = lastKalmanCal,
