@@ -33,3 +33,9 @@ app/releases/
 # Local Gradle user homes (created by CLI builds with GRADLE_USER_HOME=$PWD/...)
 /gradle_home/
 /.gradle_home/
+
+
+# Build outputs and local tool logs
+/app/release/
+.kotlin/
+app/src/main/python/output.json
