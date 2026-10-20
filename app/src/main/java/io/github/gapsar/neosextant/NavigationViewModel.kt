@@ -103,6 +103,10 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
          * 1-Shot path follow whichever attitude happened to come last.
          */
         val multiAttitude = mutableStateOf(false)
+        /** Quick re-zero: bursts feed a small rotation on top of the affine model. */
+        val rezeroMode = mutableStateOf(false)
+        val rezeroPairs = mutableStateListOf<String>()
+        val rezeroStatus = mutableStateOf("")
         /** Tags every line of the shot log, so one session can be refitted offline. */
         var sessionId = System.currentTimeMillis()
 
@@ -111,6 +115,8 @@ class NavigationViewModel(application: Application) : AndroidViewModel(applicati
             oneshotRollOffsets.clear()
             affinePairs.clear()
             affineStatus.value = ""
+            rezeroPairs.clear()
+            rezeroStatus.value = ""
             firstGravity = null
             multiAttitude.value = false
             sessionId = System.currentTimeMillis()

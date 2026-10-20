@@ -2026,6 +2026,120 @@ def fit_affine_calibration(pairs_json):
         return json.dumps({"error": error_msg})
 
 
+# ---------------------------------------------------------------------------
+# Quick re-zero: a small rotation applied after the affine model.
+#
+# The accelerometer offset drifts from day to day (on the Pi instrument, jumps
+# of more than 20 nmi). The full multi-attitude affine fit does not need
+# repeating for that; a small rotation on top of it does. One attitude cannot
+# see the rotation about its own "up" axis, so two attitudes are needed, and
+# they must differ in the phone's tilt: two sky directions at the same altitude
+# give the same "up" in the sensor frame.
+# ---------------------------------------------------------------------------
+REZERO_MIN_SPREAD_DEG = 30.0    # between the two most different attitudes
+REZERO_MAX_ROTATION_DEG = 1.0   # larger is a broken model, not a drift
+REZERO_MAX_RESIDUAL_DEG = 0.3   # what the rotation cannot explain
+
+
+def _rotation_vector(R):
+    """Axis * angle (radians) of a rotation matrix."""
+    import numpy as np
+    angle = float(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)))
+    if angle < 1e-12:
+        return np.zeros(3)
+    axis = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    return axis / (2.0 * np.sin(angle)) * angle
+
+
+def fit_rezero_rotation(pairs_json, affine_json):
+    """
+    Fit the rotation R that best maps the affine "up" onto the expected "up":
+        up = R . normalize(A . a_raw + b)
+
+    pairs_json: list of {"meas": [x,y,z] raw direction (unit), "mag": |a| (m/s^2),
+                         "exp": [x,y,z] expected up (unit)}, one per burst,
+                the same pairs as fit_affine_calibration.
+    affine_json: {"A": [9] row-major, "b": [3]}, the model in use.
+
+    The rotation is fitted against A and b only, so a new re-zero replaces
+    the previous one instead of adding to it.
+
+    Returns the rotation vector (radians), its angle, the residual, the
+    attitude spread, the misalignment of each pair before and after, a
+    `healthy` verdict and the reasons for a refusal.
+    """
+    try:
+        import numpy as np
+        pairs = json.loads(pairs_json)
+        model = json.loads(affine_json)
+        A = np.array(model["A"], dtype=float).reshape(3, 3)
+        b = np.array(model["b"], dtype=float)
+
+        ups, exps = [], []
+        for p in pairs:
+            m = np.array(p["meas"], dtype=float)
+            m = m / np.linalg.norm(m)
+            up = A @ (m * float(p.get("mag", G_STANDARD))) + b
+            ups.append(up / np.linalg.norm(up))
+            e = np.array(p["exp"], dtype=float)
+            exps.append(e / np.linalg.norm(e))
+        ups, exps = np.array(ups), np.array(exps)
+
+        def angles_deg(u, e):
+            return np.degrees(np.arccos(np.clip(np.sum(u * e, axis=1), -1.0, 1.0)))
+
+        _labels, centres = _cluster_attitudes(list(ups))
+        spread = 0.0
+        for i in range(len(centres)):
+            for j in range(i + 1, len(centres)):
+                spread = max(spread, float(np.degrees(np.arccos(
+                    np.clip(np.dot(centres[i], centres[j]), -1.0, 1.0)))))
+
+        # Wahba's problem: the rotation that minimises sum |e_i - R u_i|^2.
+        U, _S, Vt = np.linalg.svd(exps.T @ ups)
+        d = np.sign(np.linalg.det(U) * np.linalg.det(Vt))
+        R = U @ np.diag([1.0, 1.0, d]) @ Vt
+        rotvec = _rotation_vector(R)
+        angle_deg = float(np.degrees(np.linalg.norm(rotvec)))
+        before = angles_deg(ups, exps)
+        after = angles_deg(ups @ R.T, exps)
+        residual = float(np.sqrt(np.mean(after ** 2)))
+
+        reasons = []
+        if len(centres) < 2 or spread < REZERO_MIN_SPREAD_DEG:
+            reasons.append("need two tilts at least %.0f deg apart, have %.0f deg "
+                           "(change the phone's altitude, not only its direction)"
+                           % (REZERO_MIN_SPREAD_DEG, spread))
+        if angle_deg > REZERO_MAX_ROTATION_DEG:
+            reasons.append("rotation %.2f deg > %.1f deg: redo the full calibration"
+                           % (angle_deg, REZERO_MAX_ROTATION_DEG))
+        if residual > REZERO_MAX_RESIDUAL_DEG:
+            reasons.append("residual %.2f deg > %.1f deg: the bursts disagree"
+                           % (residual, REZERO_MAX_RESIDUAL_DEG))
+        healthy = not reasons
+
+        print("Python: re-zero n=%d spread=%.0f deg rotation=%.3f deg residual=%.3f deg -> %s"
+              % (len(pairs), spread, angle_deg, residual,
+                 "ACCEPTED" if healthy else "REJECTED (%s)" % "; ".join(reasons)))
+        return json.dumps({
+            "rotation": [float(x) for x in rotvec],
+            "rotation_deg": angle_deg,
+            "residual_deg": residual,
+            "spread_deg": spread,
+            "before_deg": [float(x) for x in before],
+            "after_deg": [float(x) for x in after],
+            "n_pairs": len(pairs),
+            "healthy": bool(healthy),
+            "reject_reasons": reasons,
+            "error": None
+        })
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in fit_rezero_rotation: {e}"
+        print(f"Python: {error_msg}\n{traceback.format_exc()}")
+        return json.dumps({"error": error_msg})
+
+
 # =============================================================================
 # SECTION 5: SENSOR WAVE MODELING
 # =============================================================================

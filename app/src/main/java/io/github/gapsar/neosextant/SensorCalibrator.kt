@@ -74,6 +74,9 @@ class SensorCalibrator(context: Context) {
         private const val KEY_AFFINE_VALID = "cal_affine_valid"
         private const val KEY_AFFINE_A_PREFIX = "cal_affine_a_" // a_0..a_8
         private const val KEY_AFFINE_B_PREFIX = "cal_affine_b_" // b_0..b_2
+        // Quick re-zero: rotation vector (radians) applied after the affine model
+        private const val KEY_REZERO_PREFIX = "cal_rezero_" // _0.._2
+        private const val KEY_REZERO_TIME = "cal_rezero_timestamp"
 
         /** Below this many recorded poses the per-axis scale is worse than
          *  useless (see solveAlgebraicSphereFit); only the bias is applied. */
@@ -114,6 +117,61 @@ class SensorCalibrator(context: Context) {
      *  the legacy sphere-fit + pitch/roll offset behavior. */
     fun resetAffineCalibration() {
         saveAffineParams(AffineParams())
+    }
+
+    // --- Quick re-zero ---
+
+    private var rezero: Vec3? = loadRezero()
+
+    /** The re-zero rotation vector (radians), or null if none is in use. */
+    fun getRezero(): Vec3? = rezero
+
+    /** Wall-clock time of the re-zero in use, or null. */
+    fun getRezeroTimeMs(): Long? =
+        if (rezero == null) null else prefs.getLong(KEY_REZERO_TIME, 0L).takeIf { it > 0 }
+
+    private fun loadRezero(): Vec3? {
+        if (!prefs.contains("${KEY_REZERO_PREFIX}0")) return null
+        return Vec3(
+            prefs.getFloat("${KEY_REZERO_PREFIX}0", 0f),
+            prefs.getFloat("${KEY_REZERO_PREFIX}1", 0f),
+            prefs.getFloat("${KEY_REZERO_PREFIX}2", 0f)
+        )
+    }
+
+    /** Saves a re-zero rotation fitted against the affine model in use. */
+    fun saveRezero(rotation: Vec3) {
+        rezero = rotation
+        prefs.edit()
+            .putFloat("${KEY_REZERO_PREFIX}0", rotation.x)
+            .putFloat("${KEY_REZERO_PREFIX}1", rotation.y)
+            .putFloat("${KEY_REZERO_PREFIX}2", rotation.z)
+            .putLong(KEY_REZERO_TIME, System.currentTimeMillis())
+            .apply()
+        Log.d("SensorCalibrator", "Saved re-zero rotation: $rotation")
+    }
+
+    fun clearRezero() {
+        rezero = null
+        prefs.edit()
+            .remove("${KEY_REZERO_PREFIX}0").remove("${KEY_REZERO_PREFIX}1")
+            .remove("${KEY_REZERO_PREFIX}2").remove(KEY_REZERO_TIME)
+            .apply()
+    }
+
+    /** Rotates [v] by the re-zero rotation vector (Rodrigues' formula). */
+    private fun applyRezero(v: Vec3): Vec3 {
+        val r = rezero ?: return v
+        val theta = r.magnitude()
+        if (theta < 1e-9f) return v
+        val kx = r.x / theta; val ky = r.y / theta; val kz = r.z / theta
+        val c = kotlin.math.cos(theta); val s = kotlin.math.sin(theta)
+        val dot = kx * v.x + ky * v.y + kz * v.z
+        return Vec3(
+            v.x * c + (ky * v.z - kz * v.y) * s + kx * dot * (1 - c),
+            v.y * c + (kz * v.x - kx * v.z) * s + ky * dot * (1 - c),
+            v.z * c + (kx * v.y - ky * v.x) * s + kz * dot * (1 - c)
+        )
     }
 
     // --- Persistence ---
@@ -167,6 +225,8 @@ class SensorCalibrator(context: Context) {
 
     fun saveAffineParams(newParams: AffineParams) {
         affineParams = newParams
+        // A re-zero is fitted against one affine model; it is wrong for any other.
+        clearRezero()
         prefs.edit().apply {
             putBoolean(KEY_AFFINE_VALID, newParams.valid)
             for (i in 0 until 9) putFloat("$KEY_AFFINE_A_PREFIX$i", newParams.a[i])
@@ -425,7 +485,8 @@ class SensorCalibrator(context: Context) {
 
     /**
      * Apply the affine model to a raw acceleration vector:
-     *   up = normalize(A · a_raw + b)
+     *   up = R · normalize(A · a_raw + b)
+     * where R is the quick re-zero rotation, if one is in use.
      *
      * @param aRaw The raw acceleration vector in m/s² (direction × magnitude),
      *             NOT sphere-fit corrected — the affine model subsumes that.
@@ -451,7 +512,7 @@ class SensorCalibrator(context: Context) {
                 "Affine output |A*a+b| = $mag m/s² outside sane range; rejecting")
             return null
         }
-        return Vec3(corrected.x / mag, corrected.y / mag, corrected.z / mag)
+        return applyRezero(Vec3(corrected.x / mag, corrected.y / mag, corrected.z / mag))
     }
 
     /**

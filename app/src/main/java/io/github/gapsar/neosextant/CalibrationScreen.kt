@@ -146,6 +146,13 @@ fun CalibrationScreen(
     val NEW_ATTITUDE_DEG = 15.0
     val affinePairs = session.affinePairs
     var affineStatus by session.affineStatus
+    // Quick re-zero needs two bursts at clearly different tilts (Python checks
+    // the spread from the data).
+    val MIN_REZERO_SAMPLES = 2
+    var rezeroMode by session.rezeroMode
+    val rezeroPairs = session.rezeroPairs
+    var rezeroStatus by session.rezeroStatus
+    var rezeroInUse by remember { mutableStateOf(sensorCalibrator.getRezero()) }
 
     // Local state for displayed offsets — updates immediately on calibration success
     var displayedOneshotPitch by remember { mutableStateOf(currentOneshotPitchOffset) }
@@ -396,10 +403,43 @@ fun CalibrationScreen(
                     if (sensorCalibrator.hasValidAffine()) {
                         TextButton(onClick = {
                             sensorCalibrator.resetAffineCalibration()
+                            rezeroInUse = null
+                            rezeroMode = false
                             session.reset()
                             affineStatus = "Affine calibration cleared — reverted to pitch/roll offset path."
                         }) {
                             Text("Reset affine calibration", color = Color.LightGray)
+                        }
+                    }
+
+                    // ─── Quick re-zero (only on top of an affine model) ───
+                    if (sensorCalibrator.hasValidAffine()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Switch(
+                                checked = rezeroMode,
+                                onCheckedChange = { rezeroMode = it },
+                                enabled = !isCalibrating
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Quick re-zero", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        val inUse = rezeroInUse
+                        Text(
+                            text = if (inUse == null) "No re-zero in use"
+                            else "Re-zero in use: %.2f°".format(Math.toDegrees(inUse.magnitude().toDouble())),
+                            color = Color.Gray,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (rezeroMode) {
+                            Text(
+                                text = rezeroStatus.ifEmpty {
+                                    "Enter the true position, then take 2 bursts: one with the phone tilted " +
+                                        "low (about 30° altitude), one tilted high (about 80°). Hold the phone " +
+                                        "still during each burst."
+                                },
+                                color = Color.Yellow,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
 
@@ -469,6 +509,9 @@ fun CalibrationScreen(
                                 // Snapshot on the main thread: the fit runs on IO with this
                                 // burst's pair appended.
                                 val existingPairs = affinePairs.toList()
+                                val isRezero = rezeroMode && sensorCalibrator.hasValidAffine()
+                                val existingRezeroPairs = rezeroPairs.toList()
+                                val affineModel = sensorCalibrator.getAffineParams()
 
                                 scope.launch {
                                     try {
@@ -518,9 +561,27 @@ fun CalibrationScreen(
                                             val result = combineCalibrationBurst(solved)
                                             var fitJson: String? = null
                                             val pair = result?.pairJson
-                                            if (result != null && pair != null &&
+                                            val burstUsable = result != null && pair != null &&
                                                 solved.size >= CAL_BURST_MIN_GOOD &&
-                                                result.motionDeg <= CAL_BURST_MAX_MOTION_DEG &&
+                                                result.motionDeg <= CAL_BURST_MAX_MOTION_DEG
+                                            if (isRezero) {
+                                                if (burstUsable &&
+                                                    existingRezeroPairs.size + 1 >= MIN_REZERO_SAMPLES) {
+                                                    val allPairs = org.json.JSONArray()
+                                                    existingRezeroPairs.forEach { allPairs.put(org.json.JSONObject(it)) }
+                                                    allPairs.put(pair)
+                                                    val model = org.json.JSONObject()
+                                                        .put("A", org.json.JSONArray(affineModel.a.map { it.toDouble() }))
+                                                        .put("b", org.json.JSONArray(listOf(
+                                                            affineModel.b.x.toDouble(), affineModel.b.y.toDouble(),
+                                                            affineModel.b.z.toDouble())))
+                                                    fitJson = com.chaquo.python.Python.getInstance()
+                                                        .getModule("celestial_navigator")
+                                                        .callAttr("fit_rezero_rotation", allPairs.toString(),
+                                                            model.toString())
+                                                        .toString()
+                                                }
+                                            } else if (burstUsable &&
                                                 existingPairs.size + 1 >= MIN_AFFINE_SAMPLES) {
                                                 val allPairs = org.json.JSONArray()
                                                 existingPairs.forEach { allPairs.put(org.json.JSONObject(it)) }
@@ -544,6 +605,21 @@ fun CalibrationScreen(
                                         if (result.motionDeg > CAL_BURST_MAX_MOTION_DEG) {
                                             statusMessage = "$calibrationFailedStr: the phone moved during the " +
                                                 "burst (%.1f°). Keep it still and retake.".format(result.motionDeg)
+                                            return@launch
+                                        }
+
+                                        if (isRezero) {
+                                            val pair = result.pairJson
+                                            if (pair == null) {
+                                                rezeroStatus = "Burst not usable for the re-zero (no raw gravity). Retake."
+                                                return@launch
+                                            }
+                                            rezeroPairs.add(pair.toString())
+                                            statusMessage = "Burst accepted (%d/%d shots, %.2f° off).".format(
+                                                solved.size, CAL_BURST_COUNT, result.misalignmentDeg)
+                                            rezeroStatus = applyRezeroFit(fitJson, rezeroPairs.size,
+                                                MIN_REZERO_SAMPLES, sensorCalibrator)
+                                            rezeroInUse = sensorCalibrator.getRezero()
                                             return@launch
                                         }
 
@@ -684,7 +760,9 @@ fun CalibrationScreen(
                             if (isCalibrating) {
                                 CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                             } else {
-                                val label = if (multiAttitude) {
+                                val label = if (rezeroMode && sensorCalibrator.hasValidAffine()) {
+                                    "Re-zero (${rezeroPairs.size + 1})"
+                                } else if (multiAttitude) {
                                     "${S.calibrate} (${affinePairs.size}/$MIN_AFFINE_SAMPLES)"
                                 } else if (oneshotPitchOffsets.isEmpty()) {
                                     S.calibrate
@@ -698,7 +776,7 @@ fun CalibrationScreen(
 
                     // Reset button — visible when the session holds anything
                     if (oneshotPitchOffsets.isNotEmpty() || affinePairs.isNotEmpty() ||
-                        session.firstGravity != null) {
+                        rezeroPairs.isNotEmpty() || session.firstGravity != null) {
                         TextButton(
                             onClick = {
                                 session.reset()
@@ -876,6 +954,47 @@ private class CalBurstResult(
     /** Mean affine pair {meas, mag, exp}; null if a raw snapshot was missing. */
     val pairJson: org.json.JSONObject?
 )
+
+/**
+ * Applies a re-zero fit result: saves the rotation when the fit is healthy,
+ * keeps the previous one otherwise. Returns the status line for the user.
+ */
+private fun applyRezeroFit(
+    fitJson: String?,
+    nPairs: Int,
+    minPairs: Int,
+    sensorCalibrator: SensorCalibrator
+): String {
+    if (fitJson == null) {
+        return "Re-zero: burst $nPairs/$minPairs. Now tilt the phone to a clearly different " +
+            "altitude (at least 30° apart) and take another burst."
+    }
+    return try {
+        val fit = org.json.JSONObject(fitJson)
+        val err = fit.optString("error").takeIf { it.isNotEmpty() && it != "null" }
+        if (err != null) return "Re-zero failed: $err"
+        if (fit.optBoolean("healthy", false)) {
+            val r = fit.getJSONArray("rotation")
+            sensorCalibrator.saveRezero(SensorCalibrator.Vec3(
+                r.getDouble(0).toFloat(), r.getDouble(1).toFloat(), r.getDouble(2).toFloat()))
+            val before = fit.optJSONArray("before_deg")
+            val after = fit.optJSONArray("after_deg")
+            fun rms(a: org.json.JSONArray?) = if (a == null || a.length() == 0) Double.NaN else
+                sqrt((0 until a.length()).sumOf { a.getDouble(it) * a.getDouble(it) } / a.length())
+            "Re-zero ✓ rotation %.2f° (≈%.0f nmi), misalignment %.2f° → %.2f°, %d bursts, spread %.0f°".format(
+                fit.optDouble("rotation_deg"), fit.optDouble("rotation_deg") * 60.0,
+                rms(before), rms(after), nPairs, fit.optDouble("spread_deg"))
+        } else {
+            val reasons = fit.optJSONArray("reject_reasons")
+            val why = if (reasons != null && reasons.length() > 0)
+                (0 until reasons.length()).joinToString("; ") { reasons.optString(it) } else "not reliable"
+            "Re-zero not adopted ($why). The previous one is kept. Take another burst, or Reset."
+        }
+    } catch (e: Exception) {
+        Log.w("CalibrationScreen", "Re-zero fit parse failed", e)
+        "Re-zero failed: ${e.message}"
+    }
+}
 
 /** Every calibration shot, one JSON object per line, so a session can be refitted offline. */
 private const val CALIBRATION_LOG_FILE = "calibration_shots.jsonl"

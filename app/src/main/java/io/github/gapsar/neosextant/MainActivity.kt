@@ -643,6 +643,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             .put("affine_valid", affine.valid)
             .put("affine_a", org.json.JSONArray(affine.a.map { it.toDouble() }))
             .put("affine_b", vec(affine.b))
+            .put("rezero_rotation", sensorCalibrator.getRezero()?.let { vec(it) } ?: org.json.JSONObject.NULL)
             .put("sphere_bias", vec(sphere.bias))
             .put("sphere_scale", vec(sphere.scale))
             .put("oneshot_pitch_offset_deg", getOneshotCalibrationOffset())
