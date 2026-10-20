@@ -2030,70 +2030,92 @@ def fit_affine_calibration(pairs_json):
 # SECTION 5: SENSOR WAVE MODELING
 # =============================================================================
 
+WAVE_MIN_PERIOD_S = 2.0    # shorter is hand tremor, not a ship's motion
+WAVE_MAX_PERIOD_S = 20.0   # longer is drift
+WAVE_MIN_DURATION_S = 10.0
+
+
 def build_wave_model(json_data_str):
     """
-    Analyzes 30s of gravity vectors to separate the true gravity (DC)
-    from the wave motion (AC).
-    Input: JSON string of list of [x, y, z] lists.
-    Returns: JSON string with true gravity and wave stats.
+    Measures the main wave period from a few tens of seconds of accelerometer
+    samples.
+    Input: JSON string of a list of [t_s, x, y, z] rows: the sample time in
+    seconds and the acceleration (any unit; only its direction is used).
+    Returns: JSON string with the mean "up" direction and the wave stats.
+
+    The wave tilts the measured "up" to both sides of the mean. Each sample is
+    projected on two axes perpendicular to the mean, so the swing keeps its
+    sign: the angle to the mean (always >= 0) would fold the swing and double
+    the frequency. The period is the peak of the summed power spectra of the
+    two components, on a uniform grid built from the real sample times.
+
+    The analysis is in the phone frame: a phone that rotates during the
+    recording adds its rotation to the result. Hold it as still as possible.
     """
     try:
         import json
         import numpy as np
-        
-        data = json.loads(json_data_str)
-        if not data or len(data) < 10:
+
+        data = np.array(json.loads(json_data_str), dtype=float)
+        if data.ndim != 2 or data.shape[0] < 10 or data.shape[1] != 4:
             return json.dumps({"success": False, "error": "Insufficient data"})
-            
-        arr = np.array(data) # shape (N, 3)
-        
-        # 1. True gravity is the arithmetic mean
-        true_g = np.mean(arr, axis=0)
-        norm = np.linalg.norm(true_g)
-        if norm > 0:
-            true_g = true_g / norm
-            
-        # 2. Extract Wave Properties via residuals
-        # Analyze the angle variation from the mean true gravity vector.
-        dots = np.dot(arr, true_g)
-        # Normalize the arr rows to avoid domain errors in arccos if vectors aren't perfectly unit length
-        norms = np.linalg.norm(arr, axis=1)
-        dots = dots / (norms + 1e-9)
-        dots = np.clip(dots, -1.0, 1.0)
-        angles = np.arccos(dots) # angle in radians
-        
-        mean_angle = np.mean(angles)
-        residuals = angles - mean_angle
-        
-        # Max amplitude in degrees
-        max_amplitude_deg = float(np.max(np.abs(residuals)) * (180.0 / np.pi))
-        
-        # FFT to find dominant period
-        # Assume sample rate is roughly constant. N samples over 30 seconds.
-        N = len(arr)
-        dt = 30.0 / N
-        
-        fft_vals = np.fft.rfft(residuals)
-        fft_mag = np.abs(fft_vals)
-        freqs = np.fft.rfftfreq(N, d=dt)
-        
-        # Find peak frequency (ignore DC at index 0 and ultra-low frequencies)
-        fft_mag[freqs < 0.05] = 0 # Ignore periods > 20s as likely drift, not ocean waves
-        if np.max(fft_mag) > 0:
-            peak_idx = np.argmax(fft_mag)
-            peak_freq = freqs[peak_idx]
-            period = 1.0 / peak_freq if peak_freq > 0 else 0.0
-        else:
+
+        data = data[np.argsort(data[:, 0])]
+        t = data[:, 0]
+        keep = np.concatenate(([True], np.diff(t) > 0))
+        t, acc = t[keep], data[keep, 1:]
+        duration = float(t[-1] - t[0])
+        if duration < WAVE_MIN_DURATION_S:
+            return json.dumps({"success": False,
+                               "error": f"Recording too short ({duration:.1f} s)"})
+
+        # 1. Mean "up" direction: the wave acceleration averages out.
+        mean = np.mean(acc, axis=0)
+        mean = mean / np.linalg.norm(mean)
+
+        # 2. Two axes perpendicular to the mean, and the signed tilt on each.
+        helper = np.zeros(3)
+        helper[np.argmin(np.abs(mean))] = 1.0
+        e1 = np.cross(mean, helper)
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(mean, e1)
+        units = acc / np.linalg.norm(acc, axis=1, keepdims=True)
+        tilt = np.column_stack((units @ e1, units @ e2))  # radians, small angles
+
+        # 3. Uniform grid at the mean sample rate (the real rate jitters).
+        rate = (len(t) - 1) / duration
+        grid = t[0] + np.arange(int(duration * rate) + 1) / rate
+        tilt = np.column_stack([np.interp(grid, t, tilt[:, k]) for k in range(2)])
+        tilt -= tilt.mean(axis=0)
+
+        # Amplitude: 95th percentile of the tilt away from the mean.
+        amplitude_deg = float(np.degrees(np.percentile(np.linalg.norm(tilt, axis=1), 95)))
+
+        # 4. Summed power spectrum. The window lowers the leakage; the zero
+        #    padding interpolates the spectrum, because 30 s gives bins only
+        #    1/30 Hz apart (6 s and 7.5 s are neighbours).
+        n = len(grid)
+        n_fft = 16 * n
+        window = np.hanning(n)[:, None]
+        power = np.sum(np.abs(np.fft.rfft(tilt * window, n=n_fft, axis=0)) ** 2, axis=1)
+        freqs = np.fft.rfftfreq(n_fft, d=1.0 / rate)
+        band = (freqs >= 1.0 / WAVE_MAX_PERIOD_S) & (freqs <= 1.0 / WAVE_MIN_PERIOD_S)
+        if not np.any(band) or np.max(power[band]) <= 0:
             period = 0.0
-            
+        else:
+            peak_freq = freqs[band][np.argmax(power[band])]
+            period = float(1.0 / peak_freq)
+
         result = {
             "success": True,
-            "true_gravity": [float(true_g[0]), float(true_g[1]), float(true_g[2])],
-            "wave_amplitude_deg": round(max_amplitude_deg, 2),
-            "wave_period_sec": round(float(period), 1)
+            "true_gravity": [float(mean[0]), float(mean[1]), float(mean[2])],
+            "wave_amplitude_deg": round(amplitude_deg, 2),
+            "wave_period_sec": round(period, 1),
+            "duration_sec": round(duration, 1),
+            "sample_rate_hz": round(float(rate), 1)
         }
         return json.dumps(result)
-        
+
     except Exception as e:
         import traceback
         return json.dumps({"success": False, "error": str(e), "trace": traceback.format_exc()})

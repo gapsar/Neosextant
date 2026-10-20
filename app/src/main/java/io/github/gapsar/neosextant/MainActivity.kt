@@ -91,7 +91,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var lastUiUpdateTime = 0L
 
     // Wave Modeling
-    private val waveModelBuffer = mutableListOf<FloatArray>()
+    // Rows of [time since the first sample (s), accel x, y, z]: the unfiltered
+    // sphere-fit accelerometer, because the Kalman output hides part of the wave.
+    private val waveModelBuffer = mutableListOf<DoubleArray>()
+    private var waveModelStartNs = 0L
     private var waveModelingJob: kotlinx.coroutines.Job? = null
     private val emaKalmanWaveCorrected = FloatArray(3)
     private val emaAndroidWaveCorrected = FloatArray(3)
@@ -492,7 +495,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     }
                     
                     if (vm.isWaveRecording.value) {
-                        waveModelBuffer.add(lastKalmanCal.clone())
+                        val tNs = sampleTimestampNs(it.timestamp)
+                        if (waveModelBuffer.isEmpty()) waveModelStartNs = tNs
+                        waveModelBuffer.add(doubleArrayOf(
+                            (tNs - waveModelStartNs) / 1e9,
+                            calibrated.x.toDouble(), calibrated.y.toDouble(), calibrated.z.toDouble()
+                        ))
                     }
 
                     // Decimate UI updates to ~10 Hz (every 100ms)
@@ -879,7 +887,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             val jsonArrayBuilder = StringBuilder("[")
             for (i in bufferCopy.indices) {
                 val vec = bufferCopy[i]
-                jsonArrayBuilder.append("[${vec[0]}, ${vec[1]}, ${vec[2]}]")
+                jsonArrayBuilder.append("[${vec[0]}, ${vec[1]}, ${vec[2]}, ${vec[3]}]")
                 if (i < bufferCopy.size - 1) jsonArrayBuilder.append(",")
             }
             jsonArrayBuilder.append("]")
