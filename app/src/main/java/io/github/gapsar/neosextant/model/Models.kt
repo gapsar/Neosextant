@@ -29,6 +29,7 @@ data class Tetra3AnalysisResult(
     val decDeg: Double? = null,
     val rollDeg: Double? = null,
     val fovDeg: Double? = null,
+    val numMatches: Int? = null,
     val centroids: List<Pair<Double, Double>> = emptyList(),
     val matchedStars: List<MatchedStar> = emptyList(),
     val errorMessage: String? = null
@@ -43,6 +44,21 @@ data class LineOfPositionData(
     val errorMessage: String? = null
 )
 
+// The sensor inputs behind one shot's gravity, kept so a fix can be
+// recomputed and evaluated offline. All vectors are in the sensor frame.
+data class ShotSensorRecord(
+    val exposureStartNs: Long?,   // elapsedRealtime clock, same as the sensor CSV
+    val exposureEndNs: Long?,
+    val sampleCount: Int,
+    val gyroWeight: Double,       // sum of the exp(-k * gyro^2) weights
+    val rawDirection: SensorCalibrator.Vec3,           // raw-accel Kalman, gyro-weighted mean
+    val rawMagnitude: Double,                          // gyro-weighted mean |accel| (m/s^2)
+    val rawDirectionUnweighted: SensorCalibrator.Vec3, // same samples, plain mean
+    val calibratedGravity: SensorCalibrator.Vec3,      // sphere-fit Kalman, before any offset
+    val gravityPath: String = "", // "affine", "legacy" or "horizon": what made gravityVector
+    val batteryTempC: Float?
+)
+
 // Holds results for a single sub-image within a burst capture
 data class BurstSubResult(
     val path: String,
@@ -50,7 +66,8 @@ data class BurstSubResult(
     val gravityVector: SensorCalibrator.Vec3,
     val timestamp: String,
     val measuredHeight: Double?,
-    val tetra3Result: Tetra3AnalysisResult = Tetra3AnalysisResult(analysisState = AnalysisState.PENDING)
+    val tetra3Result: Tetra3AnalysisResult = Tetra3AnalysisResult(analysisState = AnalysisState.PENDING),
+    val sensorRecord: ShotSensorRecord? = null
 )
 
 // A comprehensive data class to hold all information about a captured image
@@ -63,5 +80,7 @@ data class ImageData(
     val gravityVector: SensorCalibrator.Vec3? = null,
     val tetra3Result: Tetra3AnalysisResult = Tetra3AnalysisResult(analysisState = AnalysisState.PENDING),
     val lopData: LineOfPositionData? = null,
-    val burstSubResults: List<BurstSubResult> = emptyList()
+    val burstSubResults: List<BurstSubResult> = emptyList(),
+    // JSON of the sensor calibration and the atmosphere used for this burst
+    val sensorModelJson: String? = null
 )

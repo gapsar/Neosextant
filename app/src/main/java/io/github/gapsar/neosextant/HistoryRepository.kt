@@ -130,6 +130,36 @@ class HistoryRepository(private val context: Context) {
                 )
             }
 
+        private fun recordJson(r: io.github.gapsar.neosextant.model.ShotSensorRecord): org.json.JSONObject =
+            org.json.JSONObject().apply {
+                r.exposureStartNs?.let { put("exposureStartNs", it) }
+                r.exposureEndNs?.let { put("exposureEndNs", it) }
+                put("sampleCount", r.sampleCount)
+                put("gyroWeight", r.gyroWeight)
+                put("rawDirection", vec3Json(r.rawDirection))
+                put("rawMagnitude", r.rawMagnitude)
+                put("rawDirectionUnweighted", vec3Json(r.rawDirectionUnweighted))
+                put("calibratedGravity", vec3Json(r.calibratedGravity))
+                put("gravityPath", r.gravityPath)
+                r.batteryTempC?.let { put("batteryTempC", it.toDouble()) }
+            }
+
+        private fun recordFrom(o: org.json.JSONObject?): io.github.gapsar.neosextant.model.ShotSensorRecord? {
+            if (o == null) return null
+            return io.github.gapsar.neosextant.model.ShotSensorRecord(
+                exposureStartNs = if (o.has("exposureStartNs")) o.getLong("exposureStartNs") else null,
+                exposureEndNs = if (o.has("exposureEndNs")) o.getLong("exposureEndNs") else null,
+                sampleCount = o.optInt("sampleCount", 0),
+                gyroWeight = o.optDouble("gyroWeight", 0.0),
+                rawDirection = vec3From(o.optJSONObject("rawDirection")) ?: return null,
+                rawMagnitude = o.optDouble("rawMagnitude", 0.0),
+                rawDirectionUnweighted = vec3From(o.optJSONObject("rawDirectionUnweighted")) ?: return null,
+                calibratedGravity = vec3From(o.optJSONObject("calibratedGravity")) ?: return null,
+                gravityPath = o.optString("gravityPath", ""),
+                batteryTempC = if (o.has("batteryTempC")) o.getDouble("batteryTempC").toFloat() else null
+            )
+        }
+
         fun serializeImages(images: List<io.github.gapsar.neosextant.model.ImageData>): String {
             val jsonArray = JSONArray()
             images.forEach { img ->
@@ -148,6 +178,7 @@ class HistoryRepository(private val context: Context) {
                 tr.decDeg?.let { trObj.put("decDeg", it) }
                 tr.rollDeg?.let { trObj.put("rollDeg", it) }
                 tr.fovDeg?.let { trObj.put("fovDeg", it) }
+                tr.numMatches?.let { trObj.put("numMatches", it) }
                 tr.errorMessage?.let { trObj.put("errorMessage", it) }
                 
                 val centroidsArr = JSONArray()
@@ -189,6 +220,7 @@ class HistoryRepository(private val context: Context) {
                 // the phone thought it was in is the single most useful thing to
                 // know, and it was previously thrown away.
                 img.gravityVector?.let { obj.put("gravityVector", vec3Json(it)) }
+                img.sensorModelJson?.let { obj.put("sensorModel", org.json.JSONObject(it)) }
 
                 // Per-shot burst detail, deliberately WITHOUT centroids or matched
                 // stars: those dominate the record size and are not needed for
@@ -209,6 +241,8 @@ class HistoryRepository(private val context: Context) {
                         str.decDeg?.let { sObj.put("decDeg", it) }
                         str.rollDeg?.let { sObj.put("rollDeg", it) }
                         str.fovDeg?.let { sObj.put("fovDeg", it) }
+                        str.numMatches?.let { sObj.put("numMatches", it) }
+                        sub.sensorRecord?.let { sObj.put("sensorRecord", recordJson(it)) }
                         subsArr.put(sObj)
                     }
                     obj.put("burstSubResults", subsArr)
@@ -262,6 +296,7 @@ class HistoryRepository(private val context: Context) {
                         decDeg = if (trObj.has("decDeg")) trObj.getDouble("decDeg") else null,
                         rollDeg = if (trObj.has("rollDeg")) trObj.getDouble("rollDeg") else null,
                         fovDeg = if (trObj.has("fovDeg")) trObj.getDouble("fovDeg") else null,
+                        numMatches = if (trObj.has("numMatches")) trObj.getInt("numMatches") else null,
                         centroids = centroids,
                         matchedStars = matchedStars,
                         errorMessage = if (trObj.has("errorMessage")) trObj.getString("errorMessage") else null
@@ -302,8 +337,10 @@ class HistoryRepository(private val context: Context) {
                                         raDeg = if (sObj.has("raDeg")) sObj.getDouble("raDeg") else null,
                                         decDeg = if (sObj.has("decDeg")) sObj.getDouble("decDeg") else null,
                                         rollDeg = if (sObj.has("rollDeg")) sObj.getDouble("rollDeg") else null,
-                                        fovDeg = if (sObj.has("fovDeg")) sObj.getDouble("fovDeg") else null
-                                    )
+                                        fovDeg = if (sObj.has("fovDeg")) sObj.getDouble("fovDeg") else null,
+                                        numMatches = if (sObj.has("numMatches")) sObj.getInt("numMatches") else null
+                                    ),
+                                    sensorRecord = recordFrom(sObj.optJSONObject("sensorRecord"))
                                 )
                             )
                         }
@@ -318,7 +355,8 @@ class HistoryRepository(private val context: Context) {
                         gravityVector = vec3From(obj.optJSONObject("gravityVector")),
                         tetra3Result = tetra3Result,
                         lopData = lopData,
-                        burstSubResults = subs
+                        burstSubResults = subs,
+                        sensorModelJson = obj.optJSONObject("sensorModel")?.toString()
                     )
                     result.add(img)
                 }

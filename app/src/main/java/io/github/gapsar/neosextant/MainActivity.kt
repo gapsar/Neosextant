@@ -152,6 +152,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             getOneshotRollOffset = ::getOneshotRollOffset,
                             snapshotRawGravity = ::snapshotRawGravityForCalibration,
                             getOneshotAffineUp = ::getOneshotAffineUp,
+                            shotSensorRecord = ::shotSensorRecord,
+                            sensorModelJson = ::sensorModelJson,
                             sensorCalibrator = sensorCalibrator,
                             sensorPipeline = sensorPipeline,
                             rawAccelState = currentRawAccel,
@@ -254,6 +256,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         getOneshotRollOffset = ::getOneshotRollOffset,
                         snapshotRawGravity = ::snapshotRawGravityForCalibration,
                         getOneshotAffineUp = ::getOneshotAffineUp,
+                            shotSensorRecord = ::shotSensorRecord,
+                            sensorModelJson = ::sensorModelJson,
                         sensorCalibrator = sensorCalibrator,
                         sensorPipeline = sensorPipeline,
                         rawAccelState = currentRawAccel,
@@ -597,6 +601,54 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             SensorCalibrator.Vec3(d.x / dMag, d.y / dMag, d.z / dMag),
             agg.rawMagnitude
         )
+    }
+
+    /**
+     * The sensor inputs of one shot, for the shot record: the same window and
+     * weighting as [stopPitchAveraging], plus the unweighted raw mean and the
+     * battery temperature. The caller fills in the gravity path.
+     */
+    fun shotSensorRecord(exposure: ExposureWindow? = null): ShotSensorRecord? {
+        val snapshot = selectWindow(exposure) ?: return null
+        val agg = aggregate(snapshot) ?: return null
+        fun unit(v: SensorCalibrator.Vec3): SensorCalibrator.Vec3 {
+            val m = v.magnitude()
+            return if (m > 1e-6f) SensorCalibrator.Vec3(v.x / m, v.y / m, v.z / m) else v
+        }
+        val unweighted = SensorCalibrator.Vec3(
+            snapshot.map { it.rawGravity.x.toDouble() }.average().toFloat(),
+            snapshot.map { it.rawGravity.y.toDouble() }.average().toFloat(),
+            snapshot.map { it.rawGravity.z.toDouble() }.average().toFloat()
+        )
+        return ShotSensorRecord(
+            exposureStartNs = exposure?.startNs,
+            exposureEndNs = exposure?.endNs,
+            sampleCount = snapshot.size,
+            gyroWeight = agg.totalWeight,
+            rawDirection = unit(agg.raw),
+            rawMagnitude = agg.rawMagnitude,
+            rawDirectionUnweighted = unit(unweighted),
+            calibratedGravity = agg.calibrated,
+            batteryTempC = SensorDataLogger.readBatteryTemperatureC(this)
+        )
+    }
+
+    /** The calibration in use now, as JSON, for the shot record. */
+    fun sensorModelJson(): org.json.JSONObject {
+        val affine = sensorCalibrator.getAffineParams()
+        val sphere = sensorCalibrator.getParams()
+        fun vec(v: SensorCalibrator.Vec3) = org.json.JSONArray(
+            listOf(v.x.toDouble(), v.y.toDouble(), v.z.toDouble()))
+        return org.json.JSONObject()
+            .put("affine_valid", affine.valid)
+            .put("affine_a", org.json.JSONArray(affine.a.map { it.toDouble() }))
+            .put("affine_b", vec(affine.b))
+            .put("sphere_bias", vec(sphere.bias))
+            .put("sphere_scale", vec(sphere.scale))
+            .put("oneshot_pitch_offset_deg", getOneshotCalibrationOffset())
+            .put("oneshot_roll_offset_deg", getOneshotRollOffset())
+            .put("horizon_pitch_offset_deg", getCalibrationOffset())
+            .put("horizon_roll_offset_deg", getRollOffset())
     }
 
     /**

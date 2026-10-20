@@ -120,6 +120,9 @@ fun CameraView(
     // path). Must be called right after stopPitchAveraging() so it reads the same
     // shot's raw gravity snapshot.
     getOneshotAffineUp: (MainActivity.ExposureWindow?) -> SensorCalibrator.Vec3? = { null },
+    // The sensor inputs of one shot and the calibration in use, for the shot record.
+    shotSensorRecord: (MainActivity.ExposureWindow?) -> ShotSensorRecord? = { null },
+    sensorModelJson: () -> JSONObject = { JSONObject() },
     iso: Int,
     exposureTimeMs: Int
 ) {
@@ -511,12 +514,14 @@ fun CameraView(
                                     val avgGravityRaw = stopPitchAveraging(exposureWindow)
                                     val gravityVector: SensorCalibrator.Vec3
                                     val measuredHeight: Double?
+                                    var gravityPath = "horizon"
 
                                     if (avgGravityRaw != null) {
                                         if (solverMode == SolverMode.ONE_SHOT) {
                                             // Prefer the affine model when a validated calibration exists;
                                             // otherwise fall back to the legacy pitch/roll offset path.
                                             val affineUp = getOneshotAffineUp(exposureWindow)
+                                            gravityPath = if (affineUp != null) "affine" else "legacy"
                                             gravityVector = if (affineUp != null) {
                                                 affineUp
                                             } else {
@@ -556,7 +561,9 @@ fun CameraView(
                                         uri = uri,
                                         gravityVector = gravityVector,
                                         timestamp = timestamp,
-                                        measuredHeight = measuredHeight
+                                        measuredHeight = measuredHeight,
+                                        sensorRecord = shotSensorRecord(exposureWindow)
+                                            ?.copy(gravityPath = gravityPath)
                                     ))
 
                                     Log.d("CameraView", "Burst capture ${i + 1}/$BURST_COUNT done: $path")
@@ -575,7 +582,12 @@ fun CameraView(
                                     timestamp = firstBurst.timestamp,
                                     measuredHeight = firstBurst.measuredHeight,
                                     gravityVector = firstBurst.gravityVector,
-                                    burstSubResults = burstData
+                                    burstSubResults = burstData,
+                                    sensorModelJson = sensorModelJson()
+                                        .put("pressure_hpa", pressure.toDoubleOrNull() ?: 1013.25)
+                                        .put("temperature_c", temperature.toDoubleOrNull() ?: 15.0)
+                                        .put("solver_mode", solverMode.name)
+                                        .toString()
                                 )
 
                                 onAddImage(newImageInfo)
@@ -612,7 +624,8 @@ fun CameraView(
                                                         raDeg = imageResultJson.optDouble("ra_deg"),
                                                         decDeg = imageResultJson.optDouble("dec_deg"),
                                                         rollDeg = imageResultJson.optDouble("roll_deg"),
-                                                        fovDeg = imageResultJson.optDouble("fov_deg")
+                                                        fovDeg = imageResultJson.optDouble("fov_deg"),
+                                                        numMatches = imageResultJson.optJSONArray("matched_stars")?.length()
                                                     )
                                                 } else {
                                                     val errorMessage = imageResultJson.optString("error_message", "Unknown error")

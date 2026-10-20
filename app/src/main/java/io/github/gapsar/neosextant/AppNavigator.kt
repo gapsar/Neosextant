@@ -44,6 +44,8 @@ fun AppNavigator(
     // Affine 1-Shot calibration
     snapshotRawGravity: (MainActivity.ExposureWindow?) -> MainActivity.RawGravitySnapshot? = { null },
     getOneshotAffineUp: (MainActivity.ExposureWindow?) -> SensorCalibrator.Vec3? = { null },
+    shotSensorRecord: (MainActivity.ExposureWindow?) -> ShotSensorRecord? = { null },
+    sensorModelJson: () -> org.json.JSONObject = { org.json.JSONObject() },
     sensorCalibrator: SensorCalibrator,
     sensorPipeline: SensorPipeline,
     rawAccelState: State<SensorCalibrator.Vec3>,
@@ -280,6 +282,8 @@ fun AppNavigator(
                 getOneshotCalibrationOffset = getOneshotCalibrationOffset,
                 getOneshotRollOffset = getOneshotRollOffset,
                 getOneshotAffineUp = getOneshotAffineUp,
+                shotSensorRecord = shotSensorRecord,
+                sensorModelJson = sensorModelJson,
                 iso = vm.iso.value,
                 exposureTimeMs = vm.exposureTimeMs.value
             )
