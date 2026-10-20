@@ -353,6 +353,8 @@ object S {
     val saveReferenceNow: String @Composable get() = s("Save (time = now)", "Enregistrer (heure = maintenant)", "Guardar (hora = ahora)")
     @Composable fun referenceSaved(time: String): String =
         s("Saved at $time UTC", "Enregistrée à $time UTC", "Guardada a las $time UTC")
+    val export: String @Composable get() = s("Export", "Exporter", "Exportar")
+    val exportFailed: String @Composable get() = s("Export failed", "Échec de l’export", "Error de exportación")
     val referenceNotSet: String @Composable get() = s("Not set", "Non définie", "No definida")
 
     // ─── Image Viewer ───────────────────────────────────────────────────────────

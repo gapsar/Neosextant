@@ -29,6 +29,8 @@ fun HistoryScreen(
     // State to hold the list of entries
     var entries by remember { mutableStateOf(historyRepository.getHistory()) }
     var truthEditEntry by remember { mutableStateOf<PositionEntry?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val exportFailedLabel = S.exportFailed
 
     truthEditEntry?.let { entry ->
         fun saveTruth(t: TruthPosition?) {
@@ -59,6 +61,17 @@ fun HistoryScreen(
                 },
                 actions = {
                     if (entries.isNotEmpty()) {
+                        TextButton(onClick = {
+                            val message = try {
+                                "exports/" + historyRepository.exportForEvaluation().name
+                            } catch (e: Exception) {
+                                android.util.Log.e("HistoryScreen", "Export failed", e)
+                                "$exportFailedLabel: ${e.message}"
+                            }
+                            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+                        }) {
+                            Text(S.export)
+                        }
                         TextButton(onClick = {
                             historyRepository.clearAll()
                             entries = historyRepository.getHistory()

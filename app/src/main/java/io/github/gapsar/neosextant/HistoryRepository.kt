@@ -71,6 +71,52 @@ class HistoryRepository(private val context: Context) {
         Log.d("HistoryRepo", "Saved new position entry.")
     }
 
+    /**
+     * Writes every entry, with its shot records and true position, to
+     * files/exports/history_<UTC time>.json for the offline evaluation. The
+     * sensor CSVs stay in files/sensor_logs/: the script matches them to the
+     * shots by the elapsedRealtime clock, so they are not copied.
+     * Centroids and matched stars are left out: the evaluation does not use
+     * them and they are most of the size. Returns the file.
+     */
+    fun exportForEvaluation(): java.io.File {
+        val dir = java.io.File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            .format(TimeSynchronizer.getTrueTime())
+        val entries = JSONArray()
+        getHistory().forEach { e ->
+            val images = try { JSONArray(e.imagesJson ?: "[]") } catch (_: Exception) { JSONArray() }
+            for (i in 0 until images.length()) {
+                images.optJSONObject(i)?.optJSONObject("tetra3Result")?.apply {
+                    remove("centroids"); remove("matchedStars")
+                }
+            }
+            entries.put(org.json.JSONObject()
+                .put("id", e.id)
+                .put("savedLocal", e.timestampStr)
+                .put("latitude", e.latitude)
+                .put("longitude", e.longitude)
+                .put("errorEstimateNm", e.errorEstimateNm ?: org.json.JSONObject.NULL)
+                .put("mode", e.mode)
+                .put("estimatedLatitude", e.estimatedLatitude)
+                .put("estimatedLongitude", e.estimatedLongitude)
+                .put("truthLatitude", e.truthLatitude ?: org.json.JSONObject.NULL)
+                .put("truthLongitude", e.truthLongitude ?: org.json.JSONObject.NULL)
+                .put("truthTimeUtc", e.truthTimeUtc ?: org.json.JSONObject.NULL)
+                .put("images", images))
+        }
+        val root = org.json.JSONObject()
+            .put("format", 1)
+            .put("exportedUtc", TruthPositions.nowUtc())
+            .put("device", android.os.Build.MODEL)
+            .put("entries", entries)
+        val file = java.io.File(dir, "history_$stamp.json")
+        file.writeText(root.toString())
+        Log.d("HistoryRepo", "Exported ${entries.length()} entries to $file")
+        return file
+    }
+
     fun getHistory(): List<PositionEntry> {
         return historyDao.getAll().map { it.toPositionEntry() }
     }
